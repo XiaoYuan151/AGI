@@ -1,0 +1,89 @@
+# ---------------------------------------------------------------------------
+# OS / editor noise
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+*.bak
+
+# ---------------------------------------------------------------------------
+# Node / TypeScript
+# ---------------------------------------------------------------------------
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/plugins
+!.yarn/versions
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+dist/
+build/
+out/
+lib-cov/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+.cache/
+.eslintcache
+
+# Local env files. The README corrects you to export these in your shell
+# instead; a checked-in .env must never carry AGY/GEMINI/Anthropic keys.
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Local / per-machine agent config that must not leak into the repo
+# ---------------------------------------------------------------------------
+# OpenCode project-local plugins and state (the repo ships the plugin source
+# under opencode/plugins/, not a live install).
+.opencode/
+!.opencode/opencode.jsonc.example
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/*
+!.claude/README.md
+
+# Codex credential and cache state. NOTE: codex/.codex/config.toml and
+# codex/.agents/plugins/marketplace.json are intentional repo files and are
+# deliberately NOT matched here.
+auth.json
+history.jsonl
+sessions/
+.log/
+
+# Antigravity / ACP runtime leftovers
+.agy/
+*.acp.log
+
+# ---------------------------------------------------------------------------
+# Test and process byproducts
+# ---------------------------------------------------------------------------
+*.pid
+*.seed
+*.pid.lock
+.tmp/
+tmp/
+*.tgz

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agi",
+  "version": "0.2.0",
+  "description": "Codex plugin with hello skill plus native Antigravity (agy acp) /model provider bridge.",
+  "author": {
+    "name": "XiaoYuan151"
+  },
+  "license": "MIT",
+  "keywords": ["sample", "greeting", "agy", "acp", "antigravity", "model-provider"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "AGI + Antigravity ACP",
+        "shortDescription": "Greeting skill and native agy acp /model integration",
+        "category": "Productivity",
+        "defaultPrompt": [
+          "Use AGI to greet me or check my Antigravity ACP models with agy_status."
+        ]
+      }
+    }
+  }
+}

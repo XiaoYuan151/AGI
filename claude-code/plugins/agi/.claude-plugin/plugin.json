@@ -1,0 +1,11 @@
+{
+  "name": "agi",
+  "displayName": "AGI",
+  "version": "0.2.0",
+  "description": "Sample plugin with hello greeting plus native Antigravity (agy acp) /model bridge.",
+  "author": {
+    "name": "XiaoYuan151"
+  },
+  "license": "MIT",
+  "keywords": ["sample", "greeting", "agy", "acp", "antigravity", "model-provider"]
+}

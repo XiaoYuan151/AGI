@@ -1,0 +1,12 @@
+# Per-repo plugin switch. The key is `plugin-name@marketplace-name`,
+# where the marketplace name is the top-level `name` in
+# `.agents/plugins/marketplace.json`.
+#
+# Note: Codex ignores `model_providers` and `model_provider` in repo-local
+# `.codex/config.toml` for security. To enable native `/model` switching for
+# Antigravity (`agy acp`), run:
+#   node ./plugins/agi/scripts/setup-codex.mjs --start-bridge
+# Then launch Codex with:
+#   codex -p agy
+[plugins."agi@local-repo"]
+enabled = true
