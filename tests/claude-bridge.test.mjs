@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { AgyAcpClient } from "../claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs";
 import { createClaudeBridgeServer } from "../claude-code/plugins/agi/scripts/agy-claude-bridge.mjs";
 import { configureClaudeSettings } from "../claude-code/plugins/agi/scripts/setup-claude.mjs";
+import { runClaudeConnect } from "../claude-code/plugins/agi/scripts/agy-claude-connect.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOCK_AGY_BIN = path.join(__dirname, "fixtures", "mock-agy");
@@ -273,6 +274,7 @@ test("agy-claude-mcp.mjs responds to initialize, tools/list, and tools/call", as
     const list = await nextMessage();
     const names = list.result.tools.map((t) => t.name);
     assert.ok(names.includes("agy_status"));
+    assert.ok(names.includes("agy_connect"));
     assert.ok(names.includes("agy_list_models"));
     assert.ok(names.includes("agy_configure_claude"));
 
@@ -288,8 +290,123 @@ test("agy-claude-mcp.mjs responds to initialize, tools/list, and tools/call", as
     const payload = JSON.parse(call.result.content[0].text);
     assert.equal(payload.source, "acp");
     assert.ok(payload.data.some((m) => m.id === "anthropic-agy/gemini-custom-preview"));
+
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "agy_connect", arguments: { action: "status" } },
+      })}\n`,
+    );
+    const connectCall = await nextMessage();
+    const connectPayload = JSON.parse(connectCall.result.content[0].text);
+    assert.equal(connectPayload.ok, true);
+    assert.equal(connectPayload.harness, "claude-code");
+    assert.equal(connectPayload.canLogout, true);
+    assert.match(connectPayload.loginCommand, /--login/);
   } finally {
     rl.close();
     child.kill("SIGTERM");
+  }
+});
+
+test("Claude bridge /v1/auth endpoints and agy-claude-connect support official login, authenticate, refresh, and logout", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-claude-connect-"));
+  const geminiDir = path.join(tmpDir, "antigravity");
+  const env = {
+    ...process.env,
+    MOCK_ACP_REQUIRE_AUTH: "1",
+    GEMINI_API_KEY: "",
+  };
+  const acpClient = new AgyAcpClient({
+    agyBin: MOCK_AGY_BIN,
+    geminiDir,
+    appDataDir: "antigravity-acp",
+    usePersistedConfig: false,
+    env,
+  });
+  const bridge = createClaudeBridgeServer({
+    host: "127.0.0.1",
+    port: 0,
+    acpClient,
+  });
+
+  try {
+    await bridge.start();
+    const baseUrl = bridge.getUrl();
+
+    // GET /v1/auth before discovery initializes cleanly without hammering session/new
+    const auth0 = await (await fetch(`${baseUrl}/v1/auth`)).json();
+    assert.equal(auth0.ok, true);
+    assert.notEqual(auth0.authenticated, true);
+    assert.equal(auth0.canLogout, true);
+    assert.match(auth0.loginCommand, /--login/);
+
+    // agy-claude-connect default login runs official `agy acp ... --login` and refreshes bridge
+    const loginRes = await runClaudeConnect({
+      action: "login",
+      host: "127.0.0.1",
+      port: bridge.port,
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      usePersistedConfig: false,
+      env,
+      stdio: "pipe",
+    });
+    assert.equal(loginRes.ok, true);
+    assert.equal(loginRes.bridgeReachable, true);
+    assert.equal(loginRes.authenticated, true);
+    assert.equal(loginRes.source, "acp");
+    assert.ok(loginRes.modelsCount >= 3);
+
+    // Status via connect helper reads from bridge
+    const statusRes = await runClaudeConnect({
+      action: "status",
+      host: "127.0.0.1",
+      port: bridge.port,
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      usePersistedConfig: false,
+      env,
+    });
+    assert.equal(statusRes.ok, true);
+    assert.equal(statusRes.bridgeReachable, true);
+    assert.equal(statusRes.authenticated, true);
+
+    // POST /v1/auth/logout via connect helper clears auth cleanly
+    const logoutRes = await runClaudeConnect({
+      action: "logout",
+      host: "127.0.0.1",
+      port: bridge.port,
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      usePersistedConfig: false,
+      env,
+    });
+    assert.equal(logoutRes.ok, true);
+    assert.equal(logoutRes.bridgeReachable, true);
+
+    const authAfterLogout = await (await fetch(`${baseUrl}/v1/auth`)).json();
+    assert.equal(authAfterLogout.authenticated, false);
+
+    // POST /v1/auth/authenticate with API key
+    await acpClient.setApiKey("claude-connect-key");
+    const authApiRes = await fetch(`${baseUrl}/v1/auth/authenticate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ methodId: "gemini-api-key" }),
+    });
+    assert.equal(authApiRes.status, 200);
+    const authApiJson = await authApiRes.json();
+    assert.equal(authApiJson.ok, true);
+    assert.equal(authApiJson.authenticated, true);
+    assert.equal(authApiJson.source, "acp");
+  } finally {
+    await bridge.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
