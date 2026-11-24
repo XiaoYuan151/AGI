@@ -17,5 +17,5 @@ This plugin includes a local Anthropic-compatible bridge (`agy-claude-bridge`) a
 ## Setup & verification
 
 - Run `agy-claude-setup` (or `/agi:agy-setup`) to write settings non-destructively.
-- If Antigravity is not authenticated yet, run `agy acp --login` or export `GEMINI_API_KEY`.
+- Sign in natively inside Claude Code with `/agi:connect` (or run `agy-claude-connect` / official `agy acp --login` / export `GEMINI_API_KEY`).
 - Restart `claude` after configuring settings so Claude Code queries `/v1/models` on startup, then run `/model`.
