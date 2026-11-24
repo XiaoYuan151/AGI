@@ -8,10 +8,12 @@ import {
   AgyAcpClient,
   AgyAuthRequiredError,
   AgyPolicyCooldownError,
+  buildLoginCommandArgs,
   extractModelsFromSessionResult,
   normalizeModelId,
   parseFallbackModels,
   readPersistedAcpConfig,
+  runAgyInteractiveLogin,
 } from "../claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,11 +26,17 @@ const CODEX_CLIENT_PATH = path.resolve(
   __dirname,
   "../codex/plugins/agi/scripts/lib/agy-acp-client.mjs",
 );
+const DSH_CLIENT_PATH = path.resolve(
+  __dirname,
+  "../deepseek-harness/plugins/agi/src/lib/agy-acp-client.mjs",
+);
 
-test("Claude and Codex agy-acp-client.mjs stay byte-identical", () => {
+test("Claude, Codex, and DeepSeek Harness agy-acp-client.mjs stay byte-identical", () => {
   const a = fs.readFileSync(CLAUDE_CLIENT_PATH, "utf8");
   const b = fs.readFileSync(CODEX_CLIENT_PATH, "utf8");
+  const c = fs.readFileSync(DSH_CLIENT_PATH, "utf8");
   assert.equal(a, b);
+  assert.equal(a, c);
 });
 
 test("normalizeModelId and parseFallbackModels parse formats cleanly", () => {
@@ -369,6 +377,84 @@ test("AgyAcpClient isolates --gemini-dir + --app-data-dir from persisted config 
       assert.equal(logged.length, 1);
     } finally {
       await authClient.dispose();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("AgyAcpClient supports official loginInteractive, getAuthInfo, setApiKey, restart, and logout", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agi-acp-auth-"));
+  const geminiDir = path.join(tmpDir, "antigravity");
+  try {
+    assert.deepEqual(
+      buildLoginCommandArgs({ geminiDir, appDataDir: "antigravity-acp" }),
+      ["acp", "--gemini-dir", geminiDir, "--app-data-dir", "antigravity-acp", "--login"],
+    );
+
+    const client = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      usePersistedConfig: false,
+      env: {
+        ...process.env,
+        MOCK_ACP_REQUIRE_AUTH: "1",
+        GEMINI_API_KEY: "",
+      },
+    });
+    try {
+      // Initially unauthenticated -> fallback
+      const disc0 = await client.discoverModels({ forceRefresh: true });
+      assert.equal(disc0.authenticated, false);
+      assert.equal(disc0.source, "fallback");
+
+      const info0 = client.getAuthInfo();
+      assert.equal(info0.canLogout, true);
+      assert.ok(info0.authMethods.some((m) => m.id === "gemini-api-key"));
+      assert.match(info0.loginCommand, /--gemini-dir .* --app-data-dir antigravity-acp --login/);
+
+      // Official interactive login via `agy acp --gemini-dir ... --app-data-dir ... --login`
+      const loginRes = await client.loginInteractive({ stdio: "pipe" });
+      assert.equal(loginRes.ok, true);
+      assert.equal(loginRes.discovery.authenticated, true);
+      assert.equal(loginRes.discovery.source, "acp");
+      assert.ok(fs.existsSync(path.join(geminiDir, ".mock-logged-in")));
+
+      // Official ACP `logout` RPC clears credentials & marker
+      const logoutRes = await client.logout(6000);
+      assert.equal(logoutRes.ok, true);
+      assert.equal(fs.existsSync(path.join(geminiDir, ".mock-logged-in")), false);
+
+      // Discovery after logout drops back to fallback
+      const discAfterLogout = await client.discoverModels({ forceRefresh: true });
+      assert.equal(discAfterLogout.authenticated, false);
+      assert.equal(discAfterLogout.source, "fallback");
+
+      // Setting GEMINI_API_KEY restarts ACP and authenticates via official `gemini-api-key`
+      const changed = await client.setApiKey("test-key-from-connect");
+      assert.equal(changed, true);
+      assert.equal(client.getAuthInfo().hasGeminiApiKey, true);
+      const discKey = await client.discoverModels({ forceRefresh: true });
+      assert.equal(discKey.authenticated, true);
+      assert.equal(discKey.source, "acp");
+
+      // Clearing key returns false on duplicate clear
+      assert.equal(await client.setApiKey(""), true);
+      assert.equal(await client.setApiKey(""), false);
+
+      // Failed interactive login surfaces exit code cleanly
+      const failLogin = await runAgyInteractiveLogin({
+        agyBin: MOCK_AGY_BIN,
+        geminiDir,
+        appDataDir: "antigravity-acp",
+        env: { ...process.env, MOCK_ACP_LOGIN_FAIL: "1" },
+        stdio: "pipe",
+      });
+      assert.equal(failLogin.ok, false);
+      assert.equal(failLogin.exitCode, 1);
+    } finally {
+      await client.dispose();
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

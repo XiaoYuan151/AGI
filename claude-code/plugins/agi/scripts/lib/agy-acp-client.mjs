@@ -30,6 +30,56 @@ export function readPersistedAcpConfig(env = process.env) {
   }
 }
 
+export function buildLoginCommandArgs({ geminiDir = "", appDataDir = "" } = {}) {
+  const args = ["acp"];
+  if (typeof geminiDir === "string" && geminiDir.trim()) {
+    args.push("--gemini-dir", geminiDir.trim());
+  }
+  if (typeof appDataDir === "string" && appDataDir.trim()) {
+    args.push("--app-data-dir", appDataDir.trim());
+  }
+  args.push("--login");
+  return args;
+}
+
+export function runAgyInteractiveLogin({
+  agyBin = "agy",
+  geminiDir = "",
+  appDataDir = "",
+  env = process.env,
+  cwd = process.cwd(),
+  stdio = "inherit",
+} = {}) {
+  const args = buildLoginCommandArgs({ geminiDir, appDataDir });
+  const command = [agyBin, ...args].join(" ");
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve({ command, bin: agyBin, args, ...result });
+    };
+    let child;
+    try {
+      child = spawn(agyBin, args, { cwd, env, stdio });
+    } catch (err) {
+      finish({ ok: false, exitCode: null, signal: null, error: err.message });
+      return;
+    }
+    child.once("error", (err) => {
+      finish({ ok: false, exitCode: null, signal: null, error: err.message });
+    });
+    child.once("exit", (code, signal) => {
+      finish({
+        ok: code === 0,
+        exitCode: code,
+        signal: signal ?? null,
+        ...(code === 0 ? {} : { error: `${command} exited with code ${code ?? "null"}` }),
+      });
+    });
+  });
+}
+
 export const DEFAULT_FALLBACK_MODELS = Object.freeze([
   {
     id: "gemini-2.5-pro",
@@ -448,22 +498,89 @@ export class AgyAcpClient {
     return args;
   }
 
+  getLoginCommand() {
+    const args = buildLoginCommandArgs({
+      geminiDir: this.geminiDir,
+      appDataDir: this.appDataDir,
+    });
+    return {
+      bin: this.agyBin,
+      args,
+      command: [this.agyBin, ...args].join(" "),
+    };
+  }
+
+  formatLoginCommand() {
+    return this.getLoginCommand().command;
+  }
+
   _formatLoginCommand() {
-    const parts = [this.agyBin, "acp"];
-    if (this.geminiDir) {
-      parts.push("--gemini-dir", this.geminiDir);
-    }
-    if (this.appDataDir) {
-      parts.push("--app-data-dir", this.appDataDir);
-    }
-    parts.push("--login");
-    return parts.join(" ");
+    return this.formatLoginCommand();
   }
 
   clearCooldown() {
     this.authCooldownUntil = 0;
     this.policyCooldownUntil = 0;
     this.lastPolicyError = null;
+  }
+
+  getAuthInfo() {
+    const login = this.getLoginCommand();
+    return {
+      authenticated: this.authenticated,
+      authMethods: Array.isArray(this.initResult?.authMethods)
+        ? this.initResult.authMethods
+        : [],
+      canLogout: Boolean(this.initResult?.agentCapabilities?.auth?.logout),
+      loginCommand: login.command,
+      loginBin: login.bin,
+      loginArgs: login.args,
+      agyBin: this.agyBin,
+      geminiDir: this.geminiDir || null,
+      appDataDir: this.appDataDir || null,
+      authMethod: this.authMethod || null,
+      hasGeminiApiKey: Boolean(
+        this.env.GEMINI_API_KEY && String(this.env.GEMINI_API_KEY).trim(),
+      ),
+    };
+  }
+
+  async setApiKey(apiKey) {
+    const nextKey = typeof apiKey === "string" ? apiKey.trim() : "";
+    const prevKey =
+      typeof this.env.GEMINI_API_KEY === "string" ? this.env.GEMINI_API_KEY.trim() : "";
+    if (nextKey === prevKey) return false;
+    const nextEnv = { ...this.env };
+    if (nextKey) {
+      nextEnv.GEMINI_API_KEY = nextKey;
+    } else {
+      delete nextEnv.GEMINI_API_KEY;
+    }
+    this.env = nextEnv;
+    this.clearCooldown();
+    await this.restart();
+    return true;
+  }
+
+  async loginInteractive({ stdio = "inherit", cwd = this.defaultCwd } = {}) {
+    const loginResult = await runAgyInteractiveLogin({
+      agyBin: this.agyBin,
+      geminiDir: this.geminiDir,
+      appDataDir: this.appDataDir,
+      env: this.env,
+      cwd,
+      stdio,
+    });
+    if (!loginResult.ok) {
+      return { ...loginResult, discovery: null };
+    }
+    await this.restart();
+    const discovery = await this.discoverModels({
+      cwd,
+      forceRefresh: true,
+      timeoutMs: Math.max(8000, this.rpcTimeoutMs),
+    });
+    return { ...loginResult, discovery };
   }
 
   _ensureSpawned() {
@@ -710,6 +827,27 @@ export class AgyAcpClient {
     this.authenticated = true;
     this.clearCooldown();
     return result;
+  }
+
+  async logout(timeoutMs = this.rpcTimeoutMs) {
+    await this.initialize(timeoutMs);
+    const supportsLogout = Boolean(this.initResult?.agentCapabilities?.auth?.logout);
+    if (!supportsLogout) {
+      return {
+        ok: false,
+        supported: false,
+        message: "Connected agy acp server does not advertise auth.logout capability.",
+      };
+    }
+    const sessionIds = Array.from(this.sessions.values()).map((s) => s.sessionId);
+    this.sessions.clear();
+    await Promise.all(sessionIds.map((id) => this._closeSessionBestEffort(id)));
+    await this._request("logout", {}, timeoutMs);
+    this.authenticated = false;
+    this.lastDiscovery = null;
+    this.lastDiscoveryAt = 0;
+    this.clearCooldown();
+    return { ok: true, supported: true };
   }
 
   _resolveAutoAuthMethod() {
@@ -1161,6 +1299,8 @@ export class AgyAcpClient {
       agyBin: this.agyBin,
       geminiDir: this.geminiDir || null,
       appDataDir: this.appDataDir || null,
+      loginCommand: this.formatLoginCommand(),
+      canLogout: Boolean(this.initResult?.agentCapabilities?.auth?.logout),
       agentInfo: this.initResult?.agentInfo ?? null,
       authMethods: this.initResult?.authMethods ?? [],
       authenticated: this.authenticated,
@@ -1175,21 +1315,22 @@ export class AgyAcpClient {
     };
   }
 
-  async dispose() {
-    this.disposed = true;
+  async _shutdownProcess(reasonMessage) {
     const sessionIds = Array.from(this.sessions.values()).map((s) => s.sessionId);
     this.sessions.clear();
     await Promise.all(sessionIds.map((id) => this._closeSessionBestEffort(id)));
 
     for (const [, pending] of this.pendingRequests) {
       clearTimeout(pending.timer);
-      pending.reject(new Error("AgyAcpClient disposed"));
+      pending.reject(new Error(reasonMessage));
     }
     this.pendingRequests.clear();
     this.activeTurns.clear();
 
     const child = this.proc;
     this.proc = null;
+    this.initResult = null;
+    this.initPromise = null;
     if (this.rl) {
       try {
         this.rl.close();
@@ -1223,5 +1364,18 @@ export class AgyAcpClient {
         }
       });
     }
+  }
+
+  async restart() {
+    if (this.disposed) return;
+    await this._shutdownProcess("AgyAcpClient restarted");
+    this.lastDiscovery = null;
+    this.lastDiscoveryAt = 0;
+    this.clearCooldown();
+  }
+
+  async dispose() {
+    this.disposed = true;
+    await this._shutdownProcess("AgyAcpClient disposed");
   }
 }

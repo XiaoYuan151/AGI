@@ -1,9 +1,36 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
 
 if (process.argv.includes("--version") || process.argv.includes("-v")) {
   console.log("1.5.15-mock");
+  process.exit(0);
+}
+
+function getFlagValue(flag) {
+  const idx = process.argv.indexOf(flag);
+  if (idx !== -1 && idx + 1 < process.argv.length) {
+    return process.argv[idx + 1];
+  }
+  return "";
+}
+
+const geminiDir = getFlagValue("--gemini-dir");
+const markerPath =
+  process.env.MOCK_ACP_LOGIN_MARKER ||
+  (geminiDir ? path.join(geminiDir, ".mock-logged-in") : "");
+
+if (process.argv.includes("--login")) {
+  if (process.env.MOCK_ACP_LOGIN_FAIL === "1") {
+    console.error("Mock login failed");
+    process.exit(1);
+  }
+  if (markerPath) {
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "ok\n", "utf8");
+  }
+  console.log("Logged in to Mock Antigravity ACP.");
   process.exit(0);
 }
 
@@ -20,7 +47,7 @@ function logMethodCall(method) {
   fs.appendFileSync(logCallsPath, `${method}\n`, "utf8");
 }
 
-let authenticated = !requireAuth;
+let authenticated = !requireAuth || Boolean(markerPath && fs.existsSync(markerPath));
 let nextSessionNum = 1;
 const sessions = new Map();
 
@@ -175,13 +202,16 @@ rl.on("line", async (line) => {
         result: {
           protocolVersion: 1,
           agentCapabilities: {
+            auth: { logout: {} },
             promptCapabilities: { image: true },
             sessionCapabilities: { close: {} },
           },
           agentInfo: { name: "Mock Antigravity ACP", version: "1.5.15-mock" },
           authMethods: [
             { id: "oauth-personal", name: "Log in with Google" },
+            { id: "oauth-business", name: "Log in with Gemini Enterprise" },
             { id: "gemini-api-key", name: "Gemini API key" },
+            { id: "agent-platform", name: "Gemini Enterprise Agent Platform" },
           ],
         },
       });
@@ -192,7 +222,12 @@ rl.on("line", async (line) => {
       if (params.methodId === "gemini-api-key" && process.env.GEMINI_API_KEY) {
         authenticated = true;
         write({ jsonrpc: "2.0", id, result: {} });
-      } else if (params.methodId === "oauth-personal" && process.env.MOCK_ALLOW_OAUTH === "1") {
+      } else if (
+        (params.methodId === "oauth-personal" ||
+          params.methodId === "oauth-business" ||
+          params.methodId === "agent-platform") &&
+        process.env.MOCK_ALLOW_OAUTH === "1"
+      ) {
         authenticated = true;
         write({ jsonrpc: "2.0", id, result: {} });
       } else {
@@ -202,6 +237,19 @@ rl.on("line", async (line) => {
           error: { code: -32000, message: "Authentication failed" },
         });
       }
+      return;
+    }
+
+    if (method === "logout") {
+      authenticated = false;
+      if (markerPath && fs.existsSync(markerPath)) {
+        try {
+          fs.unlinkSync(markerPath);
+        } catch {
+          // ignore
+        }
+      }
+      write({ jsonrpc: "2.0", id, result: {} });
       return;
     }
 
