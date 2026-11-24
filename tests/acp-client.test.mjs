@@ -10,10 +10,14 @@ import {
   AgyPolicyCooldownError,
   buildLoginCommandArgs,
   extractModelsFromSessionResult,
+  listPersistedAccounts,
   normalizeModelId,
   parseFallbackModels,
   readPersistedAcpConfig,
+  removePersistedAccount,
   runAgyInteractiveLogin,
+  setActivePersistedAccount,
+  upsertPersistedAccount,
 } from "../claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -91,11 +95,66 @@ test("extractModelsFromSessionResult handles grouped configOptions and legacy mo
   });
   assert.equal(fromLegacy.currentModelId, "gemini-legacy");
   assert.equal(fromLegacy.models[0].id, "gemini-legacy");
+
+  const fromDual = extractModelsFromSessionResult({
+    configOptions: [
+      {
+        id: "model",
+        type: "select",
+        category: "model",
+        currentValue: "gemini-4-neon",
+        options: [
+          { value: "gemini-4-neon", name: "Gemini 4 Neon" },
+          { value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+          { value: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)" },
+        ],
+      },
+      {
+        id: "thought_level",
+        type: "select",
+        category: "thought_level",
+        currentValue: "high",
+        options: [
+          { value: "low", name: "Low" },
+          { value: "medium", name: "Medium" },
+          { value: "high", name: "High" },
+          { value: "xhigh", name: "Extra" },
+        ],
+      },
+    ],
+    models: {
+      currentModelId: "gemini-4-neon",
+      availableModels: [
+        { modelId: "gemini-4-neon-low", name: "Gemini 4 Neon (Low)" },
+        { modelId: "gemini-4-neon-medium", name: "Gemini 4 Neon (Medium)" },
+        { modelId: "gemini-4-neon-high", name: "Gemini 4 Neon (High)" },
+        { modelId: "gemini-4-neon-xhigh", name: "Gemini 4 Neon (XHigh)" },
+        { modelId: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
+        { modelId: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)" },
+        { modelId: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
+        { modelId: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)" },
+        { modelId: "gemini-custom-only", name: "Gemini Custom Only" },
+      ],
+    },
+  });
+  assert.deepEqual(
+    fromDual.models.map((m) => m.id),
+    ["gemini-4-neon", "gemini-3.8-flash", "gpt-oss-120b-medium", "gemini-custom-only"],
+  );
+  assert.deepEqual(
+    fromDual.models.find((m) => m.id === "gemini-4-neon").efforts,
+    ["low", "medium", "high", "xhigh"],
+  );
+  assert.deepEqual(
+    fromDual.models.find((m) => m.id === "gemini-3.8-flash").efforts,
+    ["low", "medium", "high"],
+  );
 });
 
 test("AgyAcpClient discovers models, switches model & effort, and preserves session continuity", async () => {
   const client = new AgyAcpClient({
     agyBin: MOCK_AGY_BIN,
+    usePersistedConfig: false,
     env: { ...process.env, MOCK_ACP_EMIT_TOOL_CALLS: "1" },
   });
   try {
@@ -132,6 +191,7 @@ test("AgyAcpClient supports legacy session/set_model and permission policies", a
   const client = new AgyAcpClient({
     agyBin: MOCK_AGY_BIN,
     autoApprove: true,
+    usePersistedConfig: false,
     env: {
       ...process.env,
       MOCK_ACP_LEGACY_MODELS: "1",
@@ -165,6 +225,7 @@ test("AgyAcpClient supports legacy session/set_model and permission policies", a
 test("AgyAcpClient handles unauthenticated fallback and GEMINI_API_KEY auto-auth", async () => {
   const unauthClient = new AgyAcpClient({
     agyBin: MOCK_AGY_BIN,
+    usePersistedConfig: false,
     env: { ...process.env, MOCK_ACP_REQUIRE_AUTH: "1", GEMINI_API_KEY: "" },
   });
   try {
@@ -188,6 +249,7 @@ test("AgyAcpClient handles unauthenticated fallback and GEMINI_API_KEY auto-auth
 
   const keyClient = new AgyAcpClient({
     agyBin: MOCK_AGY_BIN,
+    usePersistedConfig: false,
     env: {
       ...process.env,
       MOCK_ACP_REQUIRE_AUTH: "1",
@@ -206,6 +268,7 @@ test("AgyAcpClient handles unauthenticated fallback and GEMINI_API_KEY auto-auth
 test("AgyAcpClient cancels prompt on AbortSignal and recovers after child crash", async () => {
   const client = new AgyAcpClient({
     agyBin: MOCK_AGY_BIN,
+    usePersistedConfig: false,
   });
   try {
     // 1. Live in-flight session/cancel once prompt stream starts
@@ -224,7 +287,7 @@ test("AgyAcpClient cancels prompt on AbortSignal and recovers after child crash"
     assert.equal(res.stopReason, "cancelled");
 
     // 2. Abort firing during session/new setup resolves cleanly as cancelled without hanging
-    const raceClient = new AgyAcpClient({ agyBin: MOCK_AGY_BIN });
+    const raceClient = new AgyAcpClient({ agyBin: MOCK_AGY_BIN, usePersistedConfig: false });
     try {
       const preAc = new AbortController();
       const pendingPre = raceClient.promptTurn({
@@ -458,5 +521,208 @@ test("AgyAcpClient supports official loginInteractive, getAuthInfo, setApiKey, r
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("Multi-account config migration, isolation, collision checks, purge safety, and live switchAccount", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agi-multi-acct-"));
+  const agiHome = path.join(tmpRoot, ".agi");
+  const cfgPath = path.join(agiHome, "acp.json");
+  const legacyDir = path.join(agiHome, "antigravity");
+  const workDir = path.join(tmpRoot, "custom-work-data");
+  const env = {
+    ...process.env,
+    AGI_HOME: agiHome,
+    AGY_ACP_CONFIG: cfgPath,
+    MOCK_ACP_REQUIRE_AUTH: "1",
+    GEMINI_API_KEY: "",
+  };
+  delete env.AGY_GEMINI_DIR;
+  delete env.AGY_APP_DATA_DIR;
+  delete env.AGY_ACCOUNT;
+
+  try {
+    // 1. Legacy v1 acp.json migrates automatically to version 2 with `default` account
+    fs.mkdirSync(agiHome, { recursive: true });
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify({ geminiDir: legacyDir, appDataDir: "antigravity-acp" }),
+      "utf8",
+    );
+    const migrated = readPersistedAcpConfig(env);
+    assert.equal(migrated.version, 2);
+    assert.equal(migrated.activeAccount, "default");
+    assert.equal(migrated.geminiDir, legacyDir);
+    assert.equal(migrated.accounts.default.dataDir, legacyDir);
+
+    // 2. Add named accounts into separate data folders
+    const workAdded = upsertPersistedAccount(
+      { name: "work", dataDir: workDir, label: "Work Profile", activate: true },
+      env,
+    );
+    assert.equal(workAdded.activeAccount, "work");
+    assert.equal(workAdded.account.geminiDir, workDir);
+    assert.ok(fs.existsSync(path.join(workDir, ".agi-account.json")));
+
+    const personalAdded = upsertPersistedAccount(
+      { name: "personal", activate: false },
+      env,
+    );
+    assert.equal(personalAdded.activeAccount, "work");
+    assert.equal(
+      personalAdded.account.geminiDir,
+      path.join(agiHome, "accounts", "personal"),
+    );
+
+    // 3. Rejects assigning same folder to a second account unless force: true
+    assert.throws(
+      () => upsertPersistedAccount({ name: "dup", dataDir: workDir }, env),
+      /already used by account 'work'/,
+    );
+    upsertPersistedAccount({ name: "dup", dataDir: workDir, activate: false, force: true }, env);
+    removePersistedAccount("dup", { purgeData: true }, env);
+    // workDir is still used by 'work', so purgeData must NOT delete it
+    assert.equal(fs.existsSync(workDir), true);
+
+    const listed = listPersistedAccounts(env);
+    assert.equal(listed.activeAccount, "work");
+    assert.deepEqual(
+      listed.accounts.map((a) => a.name),
+      ["default", "personal", "work"],
+    );
+
+    // 4. Sign in only to `work`, keep `personal` unauthenticated, and verify live switchAccount isolation
+    await runAgyInteractiveLogin({
+      agyBin: MOCK_AGY_BIN,
+      geminiDir: workDir,
+      appDataDir: "antigravity-acp",
+      env,
+      stdio: "pipe",
+    });
+
+    const client = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      env,
+    });
+    try {
+      assert.equal(client.account, "work");
+      assert.equal(client.geminiDir, workDir);
+      const discWork = await client.discoverModels({ forceRefresh: true });
+      assert.equal(discWork.authenticated, true);
+      assert.equal(discWork.source, "acp");
+
+      // Switch live to `personal` -> respawns agy acp with personal's folder (unauthenticated!)
+      const sw = await client.switchAccount("personal");
+      assert.equal(sw.account, "personal");
+      assert.equal(sw.dataDir, path.join(agiHome, "accounts", "personal"));
+      assert.equal(client.status().account, "personal");
+      assert.equal(readPersistedAcpConfig(env).activeAccount, "personal");
+
+      const discPersonal = await client.discoverModels({ forceRefresh: true });
+      assert.equal(discPersonal.authenticated, false);
+      assert.equal(discPersonal.source, "fallback");
+
+      // AGY_ACCOUNT env override picks specified account directly
+      const workOnlyClient = new AgyAcpClient({
+        agyBin: MOCK_AGY_BIN,
+        env: { ...env, AGY_ACCOUNT: "work" },
+      });
+      try {
+        assert.equal(workOnlyClient.account, "work");
+        const discEnvWork = await workOnlyClient.discoverModels({ forceRefresh: true });
+        assert.equal(discEnvWork.authenticated, true);
+      } finally {
+        await workOnlyClient.dispose();
+      }
+    } finally {
+      await client.dispose();
+    }
+
+    // 5. Purge safety guard refuses protected dirs & removes normal account dirs cleanly
+    setActivePersistedAccount("default", env);
+    const rmPersonal = removePersistedAccount("personal", { purgeData: true }, env);
+    assert.equal(rmPersonal.purgedData, true);
+    assert.equal(fs.existsSync(path.join(agiHome, "accounts", "personal")), false);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("AgyAcpClient persists models cache, preserves live catalog on transient timeout, and clears cache on auth error", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agi-models-cache-"));
+  const agiHome = path.join(tmpRoot, ".agi");
+  const cfgPath = path.join(agiHome, "acp.json");
+  const geminiDir = path.join(agiHome, "antigravity");
+
+  const baseEnv = {
+    ...process.env,
+    AGI_HOME: agiHome,
+    AGY_ACP_CONFIG: cfgPath,
+    MOCK_ACP_DUAL_MODELS: "1",
+  };
+  delete baseEnv.GEMINI_API_KEY;
+
+  try {
+    upsertPersistedAccount({ name: "default", dataDir: geminiDir }, baseEnv);
+
+    // 1. Live discovery populates models-cache.json without flattened effort duplicates
+    const client1 = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      env: baseEnv,
+    });
+    try {
+      const disc = await client1.discoverModels({ forceRefresh: true });
+      assert.equal(disc.source, "acp");
+      assert.equal(disc.authenticated, true);
+      assert.deepEqual(
+        disc.models.map((m) => m.id),
+        ["gemini-4-neon", "gemini-4-carbon", "gemini-3.8-flash", "gpt-oss-120b-medium"],
+      );
+      assert.equal(fs.existsSync(path.join(agiHome, "models-cache.json")), true);
+    } finally {
+      await client1.dispose();
+    }
+
+    // 2. Fresh client reads persisted cache immediately and preserves live catalog across a transient timeout
+    const slowClient = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      env: { ...baseEnv, MOCK_ACP_SESSION_DELAY_MS: "350" },
+    });
+    try {
+      const seeded = slowClient.getCachedDiscovery();
+      assert.ok(seeded);
+      assert.equal(seeded.source, "acp");
+      assert.ok(seeded.models.some((m) => m.id === "gemini-4-neon"));
+
+      const timedOut = await slowClient.discoverModels({ forceRefresh: true, timeoutMs: 80 });
+      assert.equal(timedOut.source, "acp");
+      assert.ok(timedOut.models.some((m) => m.id === "gemini-4-neon"));
+      assert.match(timedOut.error || "", /timed out/i);
+      assert.equal(slowClient.lastDiscoveryAt, 0);
+
+      // Next fast retry succeeds without waiting 60s
+      const recovered = await slowClient.discoverModels({ forceRefresh: false, timeoutMs: 5000 });
+      assert.equal(recovered.source, "acp");
+      assert.equal(recovered.authenticated, true);
+      assert.equal(recovered.error, undefined);
+    } finally {
+      await slowClient.dispose();
+    }
+
+    // 3. Explicit auth failure clears the cached live models and drops back to fallback
+    const unauthClient = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      env: { ...baseEnv, MOCK_ACP_REQUIRE_AUTH: "1" },
+    });
+    try {
+      const unauthDisc = await unauthClient.discoverModels({ forceRefresh: true });
+      assert.equal(unauthDisc.source, "fallback");
+      assert.equal(unauthDisc.authenticated, false);
+      assert.equal(unauthClient.getCachedDiscovery(), null);
+    } finally {
+      await unauthClient.dispose();
+    }
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });

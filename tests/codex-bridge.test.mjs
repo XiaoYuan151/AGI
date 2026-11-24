@@ -356,3 +356,100 @@ test("Codex bridge /v1/auth endpoints and agy-codex-connect support official log
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("Codex bridge /v1/accounts endpoints and agy_accounts MCP tool manage multiple isolated accounts", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-codex-accounts-"));
+  const agiHome = path.join(tmpRoot, ".agi");
+  const cfgPath = path.join(agiHome, "acp.json");
+  const workDir = path.join(tmpRoot, "codex-work");
+  const sideDir = path.join(tmpRoot, "codex-side");
+  const env = {
+    ...process.env,
+    AGI_HOME: agiHome,
+    AGY_ACP_CONFIG: cfgPath,
+    MOCK_ACP_REQUIRE_AUTH: "1",
+    GEMINI_API_KEY: "",
+  };
+  delete env.AGY_GEMINI_DIR;
+  delete env.AGY_APP_DATA_DIR;
+  delete env.AGY_ACCOUNT;
+
+  const acpClient = new AgyAcpClient({
+    agyBin: MOCK_AGY_BIN,
+    env,
+  });
+  const bridge = createCodexBridgeServer({
+    host: "127.0.0.1",
+    port: 0,
+    acpClient,
+  });
+
+  try {
+    await bridge.start();
+    const baseUrl = bridge.getUrl();
+
+    await fetch(`${baseUrl}/v1/accounts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "work", dataDir: workDir }),
+    });
+
+    const loginRes = await runCodexConnect({
+      action: "login",
+      account: "work",
+      host: "127.0.0.1",
+      port: bridge.port,
+      agyBin: MOCK_AGY_BIN,
+      env,
+      stdio: "pipe",
+    });
+    assert.equal(loginRes.ok, true);
+    assert.equal(loginRes.authenticated, true);
+
+    await fetch(`${baseUrl}/v1/accounts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "side", dataDir: sideDir, activate: false }),
+    });
+
+    const swJson = await (
+      await fetch(`${baseUrl}/v1/accounts/switch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "side" }),
+      })
+    ).json();
+    assert.equal(swJson.account, "side");
+    assert.equal(swJson.authenticated, false);
+
+    const mcp = spawn(process.execPath, [MCP_SERVER_PATH], {
+      env: {
+        ...env,
+        AGY_AUTO_START_BRIDGE: "0",
+        AGY_CODEX_PORT: String(bridge.port),
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const rl = readline.createInterface({ input: mcp.stdout });
+    const nextMsg = () => new Promise((resolve) => rl.once("line", (line) => resolve(JSON.parse(line))));
+    try {
+      mcp.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "agy_accounts", arguments: { action: "switch", name: "work" } },
+        })}\n`,
+      );
+      const swMcp = JSON.parse((await nextMsg()).result.content[0].text);
+      assert.equal(swMcp.account, "work");
+      assert.equal(swMcp.authenticated, true);
+    } finally {
+      rl.close();
+      mcp.kill("SIGTERM");
+    }
+  } finally {
+    await bridge.stop();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

@@ -4,7 +4,7 @@
 
 Anti-Gravity Integration (AGI) is a plugin for Claude Code, Codex, OpenCode, DeepSeek Harness, Neuro SDK, and other harnesses that brings the advanced Gemini models into them.
 
-Install the plugin once, sign in with your harness's native connect command, and pick a Gemini model from `/model`. You can switch between Antigravity models and your normal models mid-session.
+Install the plugin once, sign in with your harness's native connect command, and pick a Gemini model from `/model`. You can switch between Antigravity models and your normal models mid-session, update everything with one command, and manage multiple accounts in isolated data folders.
 
 | Harness | Connect command | Model IDs in `/model` | Plugin folder |
 | --- | --- | --- | --- |
@@ -15,13 +15,28 @@ Install the plugin once, sign in with your harness's native connect command, and
 
 ---
 
-## Install
+## Install & Update
 
 Requirements: **Node.js 18+** and the official **Antigravity CLI (`agy`)** on your `PATH`.
 
 ### Quick install
 
-Run the installer to open an interactive multi-select picker (arrow keys / `j`/`k` to move, `Space` to toggle, `a` to select all, `Enter` to confirm) and choose which harnesses to set up:
+**Via npx / GitHub (no global install needed):**
+
+```bash
+npx xiaoyuan151/agi install
+```
+
+Or install globally via npm:
+
+```bash
+npm install -g @xiaoyuan151/agi
+agi install
+# or without installing:
+npx @xiaoyuan151/agi install
+```
+
+**Via shell script:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash
@@ -35,23 +50,38 @@ cd AGI
 ./install.sh
 ```
 
+The installer opens an interactive multi-select picker (arrow keys / `j`/`k` to move, `Space` to toggle, `a` to select all, `Enter` to confirm) to choose which harnesses to set up.
+
 Useful flags (append after `bash -s --` when using `curl`):
 
 ```bash
-./install.sh -a opencode,dsh        # install only specific harnesses (claude | codex | opencode | dsh | all)
-./install.sh --all --yes            # install all without prompting
-./install.sh --claude --local-token # Claude Code without an Anthropic account
-./install.sh --codex --codex-mode default # add agy to your default codex config instead of `-p agy`
-./install.sh --dsh --dsh-profile desktop  # target a specific DeepSeek Harness profile
-./install.sh --dry-run              # preview what would change
-./install.sh --uninstall            # pick harnesses to remove (add --purge to also clear ~/.agi)
+agi install -a opencode,dsh              # install only specific harnesses (claude | codex | opencode | dsh | all)
+agi install --all --yes                  # install all without prompting
+agi install --claude --local-token       # Claude Code without an Anthropic account
+agi install --codex --codex-mode default # add agy to default Codex config instead of `-p agy`
+agi install --dsh --dsh-profile desktop  # target a specific DeepSeek Harness profile
+agi install --dry-run                    # preview what would change
+agi uninstall --purge                    # remove plugins and delete ~/.agi state
+```
+
+(Every flag above also works with `./install.sh`.)
+
+### Update
+
+Update your checkout or npm package, refresh installed plugins/configs, and restart background bridges while preserving your chosen harnesses, options, and multi-account profiles:
+
+```bash
+agi update                  # refresh plugins & configs (add --self to also update the global npm package)
+agi update --check          # check if an update is available
+./install.sh --update       # update from git/remote and refresh all configured harnesses
+curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash -s -- --update
 ```
 
 ---
 
-## Authentication
+## Authentication & Multi-Account
 
-AGI connects through the official `agy acp` CLI only and keeps its auth state separate under `~/.agi/`.
+AGI connects through the official `agy acp` CLI only and keeps each account's auth state in an isolated data folder (`--gemini-dir`), tracked in `~/.agi/acp.json`.
 
 You can sign in with either:
 
@@ -60,13 +90,30 @@ You can sign in with either:
 
 If you haven't signed in yet, `/model` still shows a default Gemini fallback list. Once you sign in and refresh, your full model list appears automatically.
 
+### Managing multiple accounts (separate data folders)
+
+Add separate accounts into their own data folders (defaults to `~/.agi/accounts/<name>`, or specify any folder with `--data-dir`):
+
+```bash
+agi account add work --data-dir ~/agy-accounts/work --login
+agi account add personal --login
+agi account list --probe
+agi account use work        # switches active profile and updates running Claude/Codex bridges
+agi account remove work --purge
+```
+
+The same commands work via `./install.sh account ...` (or `--add-account`, `--list-accounts`, `--use-account`, `--remove-account`). Inside harnesses, you can also switch accounts directly using:
+
+- **Claude Code / Codex**: `agy_accounts` MCP tool (`list` | `add` | `switch` | `remove`)
+- **OpenCode / DeepSeek Harness**: `/agy-accounts` slash command (`list` | `add <name> --data-dir <dir>` | `use <name>` | `remove <name>`)
+
 ---
 
 ## Usage by Harness
 
 ### Claude Code
 
-If you installed via `./install.sh`, the plugin and local bridge are already configured. To set up manually from a local clone:
+If you installed via `agi install` or `./install.sh`, the plugin and local bridge are already configured. To set up manually from a local clone:
 
 ```bash
 claude --plugin-dir ./claude-code/plugins/agi
@@ -75,9 +122,9 @@ claude --plugin-dir ./claude-code/plugins/agi
 
 Restart `claude`, run `/agi:connect` to sign in or check auth status, and open `/model` to pick an `anthropic-agy/...` model. Existing Anthropic keys and `claude-*` models continue to work alongside it.
 
-Other commands: `/agi:agy-models` to refresh the model list, or `./claude-code/plugins/agi/bin/agy-claude-setup --scope user --remove` to revert settings.
+Other commands: `/agi:agy-models` to refresh the model list, or `agy-claude-setup --scope user --remove` to revert settings.
 
-> No Anthropic account? Pass `--auth-mode local-token` to `agy-claude-setup` (or `--local-token` to `install.sh`).
+> No Anthropic account? Pass `--auth-mode local-token` to `agy-claude-setup` (or `--local-token` to `agi install` / `install.sh`).
 
 ### Codex
 
@@ -111,7 +158,7 @@ Copy `opencode/plugins/agi` into `.opencode/plugins/agi/` in your project, or ad
 }
 ```
 
-Inside OpenCode, run `/connect`, choose **Antigravity (ACP)**, and sign in with `agy acp --login` or a `GEMINI_API_KEY`. Models appear automatically in `/model` and `opencode models`. You can also use `/agy-connect` (`status` | `refresh` | `logout`) and `/agy-models`.
+Inside OpenCode, run `/connect`, choose **Antigravity (ACP)**, and sign in with `agy acp --login` or a `GEMINI_API_KEY`. Models appear automatically in `/model` and `opencode models`. You can also use `/agy-connect` (`status` | `refresh` | `logout`), `/agy-models`, and `/agy-accounts`.
 
 ### DeepSeek Harness
 
@@ -121,7 +168,7 @@ To link manually from a local clone:
 node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
 ```
 
-Restart DeepSeek Harness, run `/agy-connect` to check status or sign in (e.g. `/agy-connect method gemini-api-key` or `node ./deepseek-harness/plugins/agi/scripts/agy-dsh-connect.mjs`), and choose any `agy/<model>` in the model selector. `/agy-models` and `/agy-status` are also available.
+Restart DeepSeek Harness, run `/agy-connect` to check status or sign in (e.g. `/agy-connect method gemini-api-key` or `agy-dsh-connect`), and choose any `agy/<model>` in the model selector. `/agy-models`, `/agy-status`, and `/agy-accounts` are also available.
 
 ---
 
@@ -129,9 +176,11 @@ Restart DeepSeek Harness, run `/agy-connect` to check status or sign in (e.g. `/
 
 | Variable | Default | Notes |
 | --- | --- | --- |
+| `AGI_HOME` | `~/.agi` | Shared AGI state (`acp.json`, `install.json`, `accounts/`) |
+| `AGY_ACCOUNT` | active in `acp.json` | Active account profile name override |
 | `AGY_BIN` | `agy` | Path to the `agy` binary |
 | `GEMINI_API_KEY` | — | Optional Gemini API key |
-| `AGY_GEMINI_DIR` | `~/.agi/antigravity` | Separate Gemini config folder for ACP |
+| `AGY_GEMINI_DIR` | `~/.agi/antigravity` | Override isolated Gemini data folder for ACP |
 | `AGY_CLAUDE_PORT` | `43110` | Local bridge port for Claude Code |
 | `AGY_CODEX_PORT` | `43111` | Local bridge port for Codex |
 | `DSH_HOME` | `~/.dsh` | DeepSeek Harness data directory |

@@ -1,4 +1,9 @@
-import { AgyAcpClient, parseFallbackModels } from "./lib/agy-acp-client.mjs";
+import {
+  AgyAcpClient,
+  parseFallbackModels,
+  removePersistedAccount,
+  upsertPersistedAccount,
+} from "./lib/agy-acp-client.mjs";
 import { AgyDshAdapter } from "./adapter.mjs";
 
 export const name = "agi-acp";
@@ -13,6 +18,60 @@ function asBoolean(value, fallback) {
   if (value === "true" || value === "1") return true;
   if (value === "false" || value === "0") return false;
   return fallback;
+}
+
+function tokenizeArgs(raw) {
+  const tokens = [];
+  const regex = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match;
+  while ((match = regex.exec(raw)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  return tokens;
+}
+
+function parseDshAccountArgs(raw) {
+  const tokens = tokenizeArgs(raw);
+  const subRaw = (tokens[0] || "list").toLowerCase();
+  const sub =
+    subRaw === "ls"
+      ? "list"
+      : subRaw === "switch" || subRaw === "select"
+        ? "use"
+        : subRaw === "rm" || subRaw === "delete"
+          ? "remove"
+          : subRaw;
+  let name = "";
+  let dataDir;
+  let appDataDir;
+  let authMethod;
+  let label;
+  let activate = true;
+  let purgeData = false;
+  let force = false;
+
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if ((t === "--data-dir" || t === "--gemini-dir") && tokens[i + 1] !== undefined) {
+      dataDir = tokens[++i];
+    } else if (t === "--app-data-dir" && tokens[i + 1] !== undefined) {
+      appDataDir = tokens[++i];
+    } else if ((t === "--method" || t === "--auth-method") && tokens[i + 1] !== undefined) {
+      authMethod = tokens[++i];
+    } else if (t === "--label" && tokens[i + 1] !== undefined) {
+      label = tokens[++i];
+    } else if (t === "--no-activate") {
+      activate = false;
+    } else if (t === "--purge") {
+      purgeData = true;
+    } else if (t === "--force") {
+      force = true;
+    } else if (!t.startsWith("-") && !name) {
+      name = t;
+    }
+  }
+
+  return { sub, name, dataDir, appDataDir, authMethod, label, activate, purgeData, force };
 }
 
 function registerAgyCommands(ctx, { client, providerId, providerName }) {
@@ -79,7 +138,7 @@ function registerAgyCommands(ctx, { client, providerId, providerName }) {
         const methodId = methodMap[rawMethod] || rawMethod;
         try {
           await client.authenticate(methodId, 10000);
-          const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 8000 });
+          const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 20000 });
           emitModelsUpdated();
           return {
             kind: "success",
@@ -95,7 +154,7 @@ function registerAgyCommands(ctx, { client, providerId, providerName }) {
 
       if (sub === "refresh" || sub === "--refresh") {
         await client.restart();
-        const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 8000 });
+        const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 20000 });
         emitModelsUpdated();
         return {
           kind: "success",
@@ -107,15 +166,16 @@ function registerAgyCommands(ctx, { client, providerId, providerName }) {
       }
 
       // Default: status + official sign-in instructions
-      const discovery = await client.discoverModels({ forceRefresh: false, timeoutMs: 4000 });
+      const discovery = await client.discoverModels({ forceRefresh: false, timeoutMs: 20000 });
       const info = client.getAuthInfo();
       const lines = [
         `Antigravity ACP (${providerName}) authentication:`,
+        `- account: ${info.account || "(default)"}`,
         `- authenticated: ${String(discovery.authenticated)} (${discovery.models.length} models, source: ${discovery.source})`,
         `- isolated profile: --gemini-dir ${info.geminiDir || "(default ~/.gemini)"} --app-data-dir ${info.appDataDir || "antigravity-cli"}`,
         `- official sign-in command: \`${info.loginCommand}\``,
         `- or use API key / Enterprise (recommended for Google ToS compliance): export \`GEMINI_API_KEY\` then run \`/agy-connect method gemini-api-key\``,
-        `- subcommands: \`/agy-connect refresh\` | \`/agy-connect method <id>\` | \`/agy-connect logout\``,
+        `- subcommands: \`/agy-connect refresh\` | \`/agy-connect method <id>\` | \`/agy-connect logout\` | \`/agy-accounts\``,
       ];
       if (discovery.error) {
         lines.push(`- note: ${discovery.error}`);
@@ -130,7 +190,7 @@ function registerAgyCommands(ctx, { client, providerId, providerName }) {
     description: "Refresh and list Google Antigravity (agy acp) models",
     handler: async () => {
       client.clearCooldown();
-      const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 8000 });
+      const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 20000 });
       emitModelsUpdated();
       const lines = [
         `Antigravity ACP models (provider: ${providerId}, source: ${discovery.source}, authenticated: ${String(discovery.authenticated)}):`,
@@ -152,6 +212,7 @@ function registerAgyCommands(ctx, { client, providerId, providerName }) {
       const lines = [
         `Antigravity ACP status:`,
         `- provider: ${providerId} (${providerName})`,
+        `- account: ${status.account || "(default)"}`,
         `- agyBin: ${status.agyBin}`,
         `- geminiDir: ${status.geminiDir || "(default ~/.gemini)"}`,
         `- appDataDir: ${status.appDataDir || "(default antigravity-cli)"}`,
@@ -165,6 +226,121 @@ function registerAgyCommands(ctx, { client, providerId, providerName }) {
         lines.push(`- lastError: ${status.lastError}`);
       }
       return { kind: "success", text: lines.join("\n") };
+    },
+  });
+
+  registerOne({
+    definitionId: "@local/dsh-agi:agy-accounts",
+    name: "agy-accounts",
+    description:
+      "Manage multiple Antigravity ACP accounts with isolated data folders",
+    input: {
+      hint: "[list | add <name> [--data-dir <dir>] | use <name> | remove <name> [--purge]]",
+    },
+    handler: async (invocation) => {
+      const raw = String(invocation?.rawInput || "").trim();
+      const parsed = parseDshAccountArgs(raw);
+      try {
+        if (parsed.sub === "add") {
+          if (!parsed.name) {
+            return {
+              kind: "error",
+              text: "Usage: /agy-accounts add <name> [--data-dir <dir>] [--app-data-dir <name>] [--method <id>] [--no-activate]",
+            };
+          }
+          const added = upsertPersistedAccount(
+            {
+              name: parsed.name,
+              dataDir: parsed.dataDir,
+              appDataDir: parsed.appDataDir,
+              authMethod: parsed.authMethod,
+              label: parsed.label,
+              activate: parsed.activate,
+              force: parsed.force,
+            },
+            client.env,
+          );
+          if (added.activeAccount === added.account.name) {
+            await client.switchAccount(added.account.name, { persist: false });
+            await client.discoverModels({ forceRefresh: true, timeoutMs: 20000 });
+            emitModelsUpdated();
+          }
+          return {
+            kind: "success",
+            text: [
+              `Added account '${added.account.name}' (dataDir=${added.account.geminiDir}, active=${added.activeAccount === added.account.name}).`,
+              `Sign in for this account by running \`${client.formatLoginCommand()}\` or \`/agy-connect method gemini-api-key\`.`,
+            ].join("\n"),
+          };
+        }
+
+        if (parsed.sub === "use") {
+          if (!parsed.name) {
+            return { kind: "error", text: "Usage: /agy-accounts use <name>" };
+          }
+          const switched = await client.switchAccount(parsed.name);
+          const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 20000 });
+          emitModelsUpdated();
+          return {
+            kind: "success",
+            text: [
+              `Switched active account to '${switched.account}' (dataDir=${switched.dataDir}).`,
+              `authenticated=${String(discovery.authenticated)}, models=${discovery.models.length} (${discovery.source}).`,
+              ...(discovery.authenticated === false
+                ? [`Sign in with \`${switched.loginCommand}\` or \`/agy-connect method gemini-api-key\`.`]
+                : []),
+            ].join("\n"),
+          };
+        }
+
+        if (parsed.sub === "remove") {
+          if (!parsed.name) {
+            return { kind: "error", text: "Usage: /agy-accounts remove <name> [--purge]" };
+          }
+          const prevAccount = client.account;
+          const rm = removePersistedAccount(
+            parsed.name,
+            { purgeData: parsed.purgeData },
+            client.env,
+          );
+          if (prevAccount === rm.removed.name || rm.activeAccount !== prevAccount) {
+            client.reloadPersistedConfig({ account: rm.activeAccount || "" });
+            await client.restart();
+            await client.discoverModels({ forceRefresh: true, timeoutMs: 20000 });
+            emitModelsUpdated();
+          }
+          return {
+            kind: "success",
+            text: `Removed account '${rm.removed.name}' (purgedData=${rm.purgedData}, activeAccount=${rm.activeAccount || "none"}).`,
+          };
+        }
+
+        const listed = client.listAccounts();
+        if (listed.accounts.length === 0) {
+          return {
+            kind: "success",
+            text: [
+              `No named accounts configured yet (${listed.configPath || "~/.agi/acp.json"}).`,
+              "Run `/agy-accounts add <name> --data-dir <dir>` to create one.",
+            ].join("\n"),
+          };
+        }
+        return {
+          kind: "success",
+          text: [
+            `Antigravity ACP accounts (active: ${listed.activeAccount || "none"}):`,
+            ...listed.accounts.map(
+              (a) =>
+                `- ${a.isCurrent ? "*" : " "} ${a.name} -> ${a.geminiDir || "(default)"} (appDataDir=${a.appDataDir || "default"})`,
+            ),
+          ].join("\n"),
+        };
+      } catch (err) {
+        return {
+          kind: "error",
+          text: err instanceof Error ? err.message : String(err),
+        };
+      }
     },
   });
 
@@ -184,6 +360,7 @@ export function apply(ctx, config = {}) {
   const providerId = asString(config?.providerId, "agy");
   const providerName = asString(config?.providerName, "Antigravity (ACP)");
   const agyBin = asString(config?.agyBin, process.env.AGY_BIN || "agy");
+  const account = asString(config?.account, process.env.AGY_ACCOUNT || "");
   const geminiDir = asString(config?.geminiDir, process.env.AGY_GEMINI_DIR || "");
   const appDataDir = asString(config?.appDataDir, process.env.AGY_APP_DATA_DIR || "");
   const authMethod = asString(config?.authMethod, process.env.AGY_AUTH_METHOD || "");
@@ -195,6 +372,7 @@ export function apply(ctx, config = {}) {
 
   const client = new AgyAcpClient({
     agyBin,
+    ...(account ? { account } : {}),
     geminiDir: geminiDir || undefined,
     appDataDir: appDataDir || undefined,
     authMethod: authMethod || undefined,
@@ -277,7 +455,7 @@ export function apply(ctx, config = {}) {
 
   // Non-blocking initial discovery so DSH model picker updates as soon as ACP responds
   void client
-    .discoverModels({ cwd, forceRefresh: false, timeoutMs: 3000 })
+    .discoverModels({ cwd, forceRefresh: false, timeoutMs: 20000 })
     .then(() => {
       try {
         if (typeof ctx.emit === "function") {

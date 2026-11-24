@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { AgyAcpClient } from "./lib/agy-acp-client.mjs";
+import {
+  AgyAcpClient,
+  removePersistedAccount,
+  upsertPersistedAccount,
+} from "./lib/agy-acp-client.mjs";
 import {
   buildCodexModelCatalog,
   formatOpenAiModelsList,
@@ -102,7 +106,7 @@ export function createCodexBridgeServer(options = {}) {
     }
   }
 
-  async function refreshModels({ forceRefresh = false, timeoutMs = 4000 } = {}) {
+  async function refreshModels({ forceRefresh = false, timeoutMs = 20000 } = {}) {
     const discovery = await acpClient.discoverModels({
       cwd: defaultCwd,
       forceRefresh,
@@ -139,7 +143,7 @@ export function createCodexBridgeServer(options = {}) {
         const force = url.searchParams.get("refresh") === "1";
         const discovery = await refreshModels({
           forceRefresh: force,
-          timeoutMs: 2500,
+          timeoutMs: 15000,
         });
         sendJson(res, 200, formatOpenAiModelsList(discovery.models));
         return;
@@ -149,7 +153,7 @@ export function createCodexBridgeServer(options = {}) {
         const force = url.searchParams.get("refresh") === "1";
         const discovery = await refreshModels({
           forceRefresh: force,
-          timeoutMs: 2500,
+          timeoutMs: 15000,
         });
         sendJson(res, 200, buildCodexModelCatalog(discovery.models));
         return;
@@ -157,13 +161,14 @@ export function createCodexBridgeServer(options = {}) {
 
       if (req.method === "POST" && pathname === "/v1/refresh") {
         if (url.searchParams.get("restart") === "1") {
+          acpClient.reloadPersistedConfig();
           await acpClient.restart();
         } else {
           acpClient.clearCooldown();
         }
         const discovery = await refreshModels({
           forceRefresh: true,
-          timeoutMs: 8000,
+          timeoutMs: 20000,
         });
         sendJson(res, 200, {
           ok: true,
@@ -172,6 +177,160 @@ export function createCodexBridgeServer(options = {}) {
           error: discovery.error || null,
           models: formatOpenAiModelsList(discovery.models).data,
         });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/v1/accounts") {
+        sendJson(res, 200, {
+          ok: true,
+          harness: "codex",
+          ...acpClient.listAccounts(),
+        });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/accounts") {
+        const rawBody = await readRawBody(req);
+        let body = {};
+        if (rawBody.length > 0) {
+          try {
+            body = JSON.parse(rawBody.toString("utf8"));
+          } catch {
+            sendOpenAiError(
+              res,
+              400,
+              "invalid_json",
+              "Invalid JSON request body",
+              "invalid_request_error",
+            );
+            return;
+          }
+        }
+        try {
+          const resAccount = upsertPersistedAccount(
+            {
+              name: body?.name,
+              dataDir: body?.dataDir,
+              geminiDir: body?.geminiDir,
+              appDataDir: body?.appDataDir,
+              authMethod: body?.authMethod,
+              label: body?.label,
+              activate: body?.activate !== false,
+              force: Boolean(body?.force),
+            },
+            acpClient.env,
+          );
+          let discovery = cachedDiscovery;
+          if (resAccount.activeAccount === resAccount.account.name) {
+            await acpClient.switchAccount(resAccount.account.name, { persist: false });
+            discovery = await refreshModels({ forceRefresh: true, timeoutMs: 20000 });
+          }
+          sendJson(res, 200, {
+            ok: true,
+            account: resAccount.account,
+            activeAccount: resAccount.activeAccount,
+            authenticated: discovery.authenticated,
+            source: discovery.source,
+            modelsCount: discovery.models.length,
+            loginCommand: acpClient.formatLoginCommand(),
+          });
+        } catch (err) {
+          sendOpenAiError(
+            res,
+            400,
+            "invalid_request",
+            err.message,
+            "invalid_request_error",
+          );
+        }
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/accounts/switch") {
+        const rawBody = await readRawBody(req);
+        let body = {};
+        if (rawBody.length > 0) {
+          try {
+            body = JSON.parse(rawBody.toString("utf8"));
+          } catch {
+            sendOpenAiError(
+              res,
+              400,
+              "invalid_json",
+              "Invalid JSON request body",
+              "invalid_request_error",
+            );
+            return;
+          }
+        }
+        try {
+          const targetName = body?.name || body?.account || "";
+          const switchRes = await acpClient.switchAccount(targetName);
+          const discovery = await refreshModels({ forceRefresh: true, timeoutMs: 20000 });
+          sendJson(res, 200, {
+            ...switchRes,
+            authenticated: discovery.authenticated,
+            source: discovery.source,
+            modelsCount: discovery.models.length,
+            models: formatOpenAiModelsList(discovery.models).data,
+          });
+        } catch (err) {
+          sendOpenAiError(
+            res,
+            400,
+            "invalid_request",
+            err.message,
+            "invalid_request_error",
+          );
+        }
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/accounts/remove") {
+        const rawBody = await readRawBody(req);
+        let body = {};
+        if (rawBody.length > 0) {
+          try {
+            body = JSON.parse(rawBody.toString("utf8"));
+          } catch {
+            sendOpenAiError(
+              res,
+              400,
+              "invalid_json",
+              "Invalid JSON request body",
+              "invalid_request_error",
+            );
+            return;
+          }
+        }
+        try {
+          const targetName = body?.name || body?.account || "";
+          const prevAccount = acpClient.account;
+          const rmRes = removePersistedAccount(
+            targetName,
+            { purgeData: Boolean(body?.purgeData) },
+            acpClient.env,
+          );
+          if (prevAccount === rmRes.removed.name || rmRes.activeAccount !== prevAccount) {
+            acpClient.reloadPersistedConfig({ account: rmRes.activeAccount || "" });
+            await acpClient.restart();
+            await refreshModels({ forceRefresh: true, timeoutMs: 20000 });
+          }
+          sendJson(res, 200, {
+            ok: true,
+            removed: rmRes.removed,
+            purgedData: rmRes.purgedData,
+            activeAccount: rmRes.activeAccount,
+          });
+        } catch (err) {
+          sendOpenAiError(
+            res,
+            400,
+            "invalid_request",
+            err.message,
+            "invalid_request_error",
+          );
+        }
         return;
       }
 
@@ -213,7 +372,7 @@ export function createCodexBridgeServer(options = {}) {
             ? body.methodId.trim()
             : "gemini-api-key";
         await acpClient.authenticate(methodId, 10000);
-        const discovery = await refreshModels({ forceRefresh: true, timeoutMs: 8000 });
+        const discovery = await refreshModels({ forceRefresh: true, timeoutMs: 20000 });
         sendJson(res, 200, {
           ok: true,
           methodId,
@@ -580,7 +739,7 @@ async function main() {
       catalogPath: args.catalogPath,
     });
     const addr = await bridge.start();
-    void bridge.refreshModels({ forceRefresh: false, timeoutMs: 4000 });
+    void bridge.refreshModels({ forceRefresh: false, timeoutMs: 20000 });
     console.log(`agy-codex-bridge listening on http://${addr.host}:${addr.port}`);
 
     const shutdown = async () => {

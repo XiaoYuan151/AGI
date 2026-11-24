@@ -189,7 +189,12 @@ export function renderSelectorFrame(state, { useColor = true } = {}) {
       }
     : { cyan: "", green: "", yellow: "", red: "", dim: "", bold: "", reset: "" };
 
-  const verb = state.action === "uninstall" ? "uninstall AGI from" : "install AGI to";
+  const verb =
+    state.action === "uninstall"
+      ? "uninstall AGI from"
+      : state.action === "update"
+        ? "update AGI for"
+        : "install AGI to";
   const lines = [
     `${c.cyan}◆${c.reset}  ${c.bold}Which agents would you like to ${verb}?${c.reset}`,
     `${c.dim}│  Official Google Antigravity ACP (agy acp) · ToS-compliant stdio protocol${c.reset}`,

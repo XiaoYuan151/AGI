@@ -46,6 +46,8 @@ export function configureClaudeSettings({
   defaultModel = DEFAULT_FALLBACK_MODELS[0].id,
   setDefault = false,
   includeModelPicker = false,
+  account,
+  acpConfig,
   geminiDir,
   appDataDir,
   models = DEFAULT_FALLBACK_MODELS,
@@ -78,6 +80,8 @@ export function configureClaudeSettings({
         "ANTHROPIC_CUSTOM_MODEL_OPTION",
         "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
         "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
+        "AGY_ACCOUNT",
+        "AGY_ACP_CONFIG",
         "AGY_GEMINI_DIR",
         "AGY_APP_DATA_DIR",
       ]) {
@@ -139,6 +143,12 @@ export function configureClaudeSettings({
   next.env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION = rawDesc.endsWith(`(${normalizedDefault})`)
     ? rawDesc
     : `${rawDesc} (${normalizedDefault})`;
+  if (typeof acpConfig === "string" && acpConfig.trim()) {
+    next.env.AGY_ACP_CONFIG = acpConfig.trim();
+  }
+  if (typeof account === "string" && account.trim()) {
+    next.env.AGY_ACCOUNT = account.trim();
+  }
   if (typeof geminiDir === "string" && geminiDir.trim()) {
     next.env.AGY_GEMINI_DIR = geminiDir.trim();
   }
@@ -226,8 +236,10 @@ function parseCliArgs(argv) {
     defaultModel: DEFAULT_FALLBACK_MODELS[0].id,
     setDefault: false,
     includeModelPicker: false,
-    geminiDir: process.env.AGY_GEMINI_DIR || undefined,
-    appDataDir: process.env.AGY_APP_DATA_DIR || undefined,
+    account: undefined,
+    acpConfig: undefined,
+    geminiDir: undefined,
+    appDataDir: undefined,
     remove: false,
     dryRun: false,
     startBridge: false,
@@ -241,6 +253,8 @@ function parseCliArgs(argv) {
     else if (t === "--host" && argv[i + 1]) opts.host = argv[++i];
     else if (t === "--auth-mode" && argv[i + 1]) opts.authMode = argv[++i];
     else if (t === "--default-model" && argv[i + 1]) opts.defaultModel = argv[++i];
+    else if (t === "--account" && argv[i + 1]) opts.account = argv[++i];
+    else if (t === "--acp-config" && argv[i + 1]) opts.acpConfig = argv[++i];
     else if (t === "--gemini-dir" && argv[i + 1]) opts.geminiDir = argv[++i];
     else if (t === "--app-data-dir" && argv[i + 1]) opts.appDataDir = argv[++i];
     else if (t === "--set-default") opts.setDefault = true;
@@ -267,6 +281,8 @@ async function main() {
         "  --auth-mode auto|preserve|local-token",
         "                              Credential handling for gateway discovery",
         "  --default-model <id>        AGY model for ANTHROPIC_CUSTOM_MODEL_OPTION",
+        "  --account <name>            Pin a named AGI account profile (AGY_ACCOUNT)",
+        "  --acp-config <path>         Pin persisted acp.json path (AGY_ACP_CONFIG)",
         "  --gemini-dir <dir>          Isolated --gemini-dir passed to agy acp",
         "  --app-data-dir <name>       --app-data-dir passed to agy acp (e.g. antigravity-acp)",
         "  --set-default               Also set settings.model to anthropic-agy/<id>",

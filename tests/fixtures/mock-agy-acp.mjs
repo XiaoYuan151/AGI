@@ -37,6 +37,8 @@ if (process.argv.includes("--login")) {
 const requireAuth = process.env.MOCK_ACP_REQUIRE_AUTH === "1";
 const error403 = process.env.MOCK_ACP_ERROR_403 === "1";
 const legacyModels = process.env.MOCK_ACP_LEGACY_MODELS === "1";
+const dualModels = process.env.MOCK_ACP_DUAL_MODELS === "1";
+const sessionDelayMs = Math.max(0, Number(process.env.MOCK_ACP_SESSION_DELAY_MS || 0));
 const requestPermission = process.env.MOCK_ACP_REQUEST_PERMISSION === "1";
 const emitToolCalls = process.env.MOCK_ACP_EMIT_TOOL_CALLS === "1";
 const ignoreCancel = process.env.MOCK_ACP_IGNORE_CANCEL === "1";
@@ -85,7 +87,82 @@ function write(msg) {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
 }
 
+const DUAL_BASE_MODELS = [
+  {
+    value: "gemini-4-neon",
+    name: "Gemini 4 Neon",
+    description: "Next-gen Neon model",
+    _meta: { contextWindow: 1000000, maxOutputTokens: 65536 },
+  },
+  {
+    value: "gemini-4-carbon",
+    name: "Gemini 4 Carbon",
+    description: "Next-gen Carbon model",
+    _meta: { contextWindow: 1000000, maxOutputTokens: 65536 },
+  },
+  {
+    value: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description: "Fast 3.8 model",
+    _meta: { contextWindow: 1000000, maxOutputTokens: 65536 },
+  },
+  {
+    value: "gpt-oss-120b-medium",
+    name: "GPT-OSS 120B (Medium)",
+    description: "Open-weight model",
+    _meta: { contextWindow: 131072, maxOutputTokens: 32768 },
+  },
+];
+
+const DUAL_EFFORTS = [
+  { value: "low", name: "Low" },
+  { value: "medium", name: "Medium" },
+  { value: "high", name: "High" },
+  { value: "xhigh", name: "Extra" },
+];
+
+const DUAL_AVAILABLE_MODELS = [
+  { modelId: "gemini-4-neon-low", name: "Gemini 4 Neon (Low)" },
+  { modelId: "gemini-4-neon-medium", name: "Gemini 4 Neon (Medium)" },
+  { modelId: "gemini-4-neon-high", name: "Gemini 4 Neon (High)" },
+  { modelId: "gemini-4-neon-xhigh", name: "Gemini 4 Neon (XHigh)" },
+  { modelId: "gemini-4-carbon-low", name: "Gemini 4 Carbon (Low)" },
+  { modelId: "gemini-4-carbon-medium", name: "Gemini 4 Carbon (Medium)" },
+  { modelId: "gemini-4-carbon-high", name: "Gemini 4 Carbon (High)" },
+  { modelId: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
+  { modelId: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)" },
+  { modelId: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
+  { modelId: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)" },
+];
+
 function makeSessionPayload(session) {
+  if (dualModels) {
+    return {
+      sessionId: session.sessionId,
+      models: {
+        currentModelId: session.model,
+        availableModels: DUAL_AVAILABLE_MODELS,
+      },
+      configOptions: [
+        {
+          id: "model",
+          name: "Model",
+          type: "select",
+          category: "model",
+          currentValue: session.model,
+          options: DUAL_BASE_MODELS,
+        },
+        {
+          id: "thought_level",
+          name: "Thinking Level",
+          type: "select",
+          category: "thought_level",
+          currentValue: session.effort,
+          options: DUAL_EFFORTS,
+        },
+      ],
+    };
+  }
   if (legacyModels) {
     return {
       sessionId: session.sessionId,
@@ -255,6 +332,9 @@ rl.on("line", async (line) => {
 
     if (method === "session/new") {
       logMethodCall(method);
+      if (sessionDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, sessionDelayMs));
+      }
       if (error403) {
         write({
           jsonrpc: "2.0",
@@ -275,7 +355,7 @@ rl.on("line", async (line) => {
       const session = {
         sessionId,
         cwd: params.cwd || process.cwd(),
-        model: "gemini-2.5-pro",
+        model: dualModels ? "gemini-4-neon" : "gemini-2.5-pro",
         effort: "medium",
         turns: 0,
         cancelled: false,

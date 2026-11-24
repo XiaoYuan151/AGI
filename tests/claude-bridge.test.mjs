@@ -410,3 +410,137 @@ test("Claude bridge /v1/auth endpoints and agy-claude-connect support official l
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("Claude bridge /v1/accounts endpoints and agy_accounts MCP tool manage multiple isolated accounts", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-claude-accounts-"));
+  const agiHome = path.join(tmpRoot, ".agi");
+  const cfgPath = path.join(agiHome, "acp.json");
+  const workDir = path.join(tmpRoot, "work-data");
+  const personalDir = path.join(tmpRoot, "personal-data");
+  const env = {
+    ...process.env,
+    AGI_HOME: agiHome,
+    AGY_ACP_CONFIG: cfgPath,
+    MOCK_ACP_REQUIRE_AUTH: "1",
+    GEMINI_API_KEY: "",
+  };
+  delete env.AGY_GEMINI_DIR;
+  delete env.AGY_APP_DATA_DIR;
+  delete env.AGY_ACCOUNT;
+
+  const acpClient = new AgyAcpClient({
+    agyBin: MOCK_AGY_BIN,
+    env,
+  });
+  const bridge = createClaudeBridgeServer({
+    host: "127.0.0.1",
+    port: 0,
+    acpClient,
+  });
+
+  try {
+    await bridge.start();
+    const baseUrl = bridge.getUrl();
+
+    // Add 'work' via bridge endpoint
+    const addWorkRes = await fetch(`${baseUrl}/v1/accounts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "work", dataDir: workDir, appDataDir: "antigravity-acp" }),
+    });
+    assert.equal(addWorkRes.status, 200);
+    const addWorkJson = await addWorkRes.json();
+    assert.equal(addWorkJson.ok, true);
+    assert.equal(addWorkJson.activeAccount, "work");
+    assert.equal(addWorkJson.account.geminiDir, workDir);
+
+    // Log in specifically to 'work'
+    const loginWork = await runClaudeConnect({
+      action: "login",
+      account: "work",
+      host: "127.0.0.1",
+      port: bridge.port,
+      agyBin: MOCK_AGY_BIN,
+      env,
+      stdio: "pipe",
+    });
+    assert.equal(loginWork.ok, true);
+    assert.equal(loginWork.authenticated, true);
+    assert.ok(fs.existsSync(path.join(workDir, ".mock-logged-in")));
+
+    // Add 'personal' without activating
+    const addPersonalRes = await fetch(`${baseUrl}/v1/accounts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "personal", dataDir: personalDir, activate: false }),
+    });
+    assert.equal(addPersonalRes.status, 200);
+
+    const listRes = await (await fetch(`${baseUrl}/v1/accounts`)).json();
+    assert.equal(listRes.activeAccount, "work");
+    assert.equal(listRes.accounts.length, 2);
+
+    // Switch bridge to 'personal' -> unauthenticated in its own isolated folder
+    const switchRes = await fetch(`${baseUrl}/v1/accounts/switch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "personal" }),
+    });
+    assert.equal(switchRes.status, 200);
+    const switchJson = await switchRes.json();
+    assert.equal(switchJson.account, "personal");
+    assert.equal(switchJson.dataDir, personalDir);
+    assert.equal(switchJson.authenticated, false);
+
+    // Remove 'personal' with purgeData -> folder removed, bridge falls back to 'work' (authenticated)
+    const rmRes = await fetch(`${baseUrl}/v1/accounts/remove`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "personal", purgeData: true }),
+    });
+    assert.equal(rmRes.status, 200);
+    const rmJson = await rmRes.json();
+    assert.equal(rmJson.purgedData, true);
+    assert.equal(rmJson.activeAccount, "work");
+    assert.equal(fs.existsSync(personalDir), false);
+
+    const authNow = await (await fetch(`${baseUrl}/v1/auth`)).json();
+    assert.equal(authNow.account, "work");
+    assert.equal(authNow.authenticated, true);
+
+    // Test agy_accounts MCP tool against the running bridge
+    const mcp = spawn(process.execPath, [MCP_SERVER_PATH], {
+      env: {
+        ...env,
+        AGY_AUTO_START_BRIDGE: "0",
+        AGY_CLAUDE_PORT: String(bridge.port),
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const rl = readline.createInterface({ input: mcp.stdout });
+    const nextMsg = () => new Promise((resolve) => rl.once("line", (line) => resolve(JSON.parse(line))));
+    try {
+      mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
+      const listTools = await nextMsg();
+      assert.ok(listTools.result.tools.some((t) => t.name === "agy_accounts"));
+
+      mcp.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "agy_accounts", arguments: { action: "list" } },
+        })}\n`,
+      );
+      const acctList = JSON.parse((await nextMsg()).result.content[0].text);
+      assert.equal(acctList.activeAccount, "work");
+      assert.equal(acctList.bridgeReachable, true);
+    } finally {
+      rl.close();
+      mcp.kill("SIGTERM");
+    }
+  } finally {
+    await bridge.stop();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

@@ -21,4 +21,6 @@ Arguments: $ARGUMENTS
        ```
        (which runs the official unmodified `agy acp [--gemini-dir ...] [--app-data-dir ...] --login` command and automatically refreshes the local bridge).
      - After sign-in completes, call `agy_connect({ action: "refresh" })` and confirm the live `anthropic-agy/*` models are ready in `/model`.
-3. Include a brief Google ToS compliance note: this plugin only uses Google's official `agy acp` stdio protocol and `agy acp --login`; for automated or third-party harness usage, `GEMINI_API_KEY` or Gemini Enterprise (`oauth-business` / `agent-platform`) is recommended.
+3. **Multi-account management**:
+   - Use the `agy_accounts` MCP tool (`action: "list" | "add" | "switch" | "remove"`) to add or switch between isolated accounts stored in separate data folders (or run `agi account add <name> --data-dir <dir> --login` / `agi account use <name>` in your terminal).
+4. Include a brief Google ToS compliance note: this plugin only uses Google's official `agy acp` stdio protocol and `agy acp --login`; for automated or third-party harness usage, `GEMINI_API_KEY` or Gemini Enterprise (`oauth-business` / `agent-platform`) is recommended.

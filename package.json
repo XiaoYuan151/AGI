@@ -1,0 +1,86 @@
+{
+  "name": "@xiaoyuan151/agi",
+  "version": "0.3.0",
+  "description": "Anti-Gravity Integration (AGI): native Antigravity (agy acp) plugins, local bridges, multi-account profile manager, and installer/updater for Claude Code, Codex, OpenCode, and DeepSeek Harness.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "XiaoYuan151",
+    "email": "contact@xiaoyuan151.com",
+    "url": "https://github.com/XiaoYuan151"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XiaoYuan151/AGI.git"
+  },
+  "homepage": "https://github.com/XiaoYuan151/AGI#readme",
+  "bugs": {
+    "url": "https://github.com/XiaoYuan151/AGI/issues"
+  },
+  "keywords": [
+    "antigravity",
+    "agy",
+    "acp",
+    "gemini",
+    "claude-code",
+    "codex",
+    "opencode",
+    "deepseek-harness",
+    "ai-plugin",
+    "multi-account"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./acp-client": "./claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs",
+    "./accounts": "./scripts/accounts.mjs",
+    "./installer": "./src/installer.mjs",
+    "./cli": "./bin/agi.mjs",
+    "./claude": "./claude-code/plugins/agi/scripts/agy-claude-bridge.mjs",
+    "./codex": "./codex/plugins/agi/scripts/agy-codex-bridge.mjs",
+    "./dsh": "./deepseek-harness/plugins/agi/src/index.mjs",
+    "./opencode": "./opencode/plugins/agi/src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "agi": "./bin/agi.mjs",
+    "agy-claude-bridge": "./claude-code/plugins/agi/scripts/agy-claude-bridge.mjs",
+    "agy-claude-connect": "./claude-code/plugins/agi/scripts/agy-claude-connect.mjs",
+    "agy-claude-setup": "./claude-code/plugins/agi/scripts/setup-claude.mjs",
+    "agy-codex-bridge": "./codex/plugins/agi/scripts/agy-codex-bridge.mjs",
+    "agy-codex-connect": "./codex/plugins/agi/scripts/agy-codex-connect.mjs",
+    "agy-codex-setup": "./codex/plugins/agi/scripts/setup-codex.mjs",
+    "agy-dsh-connect": "./deepseek-harness/plugins/agi/scripts/agy-dsh-connect.mjs",
+    "agy-dsh-setup": "./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/",
+    "install.sh",
+    "claude-code/",
+    "claude-code/.claude-plugin/",
+    "claude-code/plugins/agi/.claude-plugin/",
+    "claude-code/plugins/agi/.mcp.json",
+    "codex/",
+    "codex/.agents/",
+    "codex/.codex/",
+    "opencode/",
+    "deepseek-harness/",
+    "LICENSE",
+    "README*.md"
+  ],
+  "scripts": {
+    "agi": "node ./bin/agi.mjs",
+    "test": "node --test tests/acp-client.test.mjs tests/claude-bridge.test.mjs tests/codex-bridge.test.mjs tests/dsh-plugin.test.mjs tests/install.test.mjs tests/npm-package.test.mjs",
+    "test:opencode": "bun test tests/opencode-plugin.test.mjs",
+    "test:all": "npm test && npm run test:opencode",
+    "pack:check": "npm pack --dry-run"
+  }
+}

@@ -3,8 +3,8 @@
 Native DeepSeek Harness Cordis bundle (`@local/dsh-agi`). Zero build steps and zero third-party npm runtime dependencies.
 
 - **Native LLM Provider (`agy`)**: Registers an in-process `LlmAdapter` via `ctx.llm.registerAdapter(["agy"], adapter)` backed directly by Google's official `agy acp` over stdio JSON-RPC 2.0 (no local HTTP bridge daemon needed).
-- **Native Slash Commands**: Registers `/agy-connect`, `/agy-models`, and `/agy-status` via `ctx.commands.register(...)`.
-- **Isolated ACP Profile & ToS Compliance**: Reads `~/.agi/acp.json` (`--gemini-dir` + `--app-data-dir antigravity-acp`) and uses only Google's official unmodified `agy acp` subprocess and `agy acp --login` / official ACP `authenticate` & `logout` RPCs.
+- **Native Slash Commands**: Registers `/agy-connect`, `/agy-models`, `/agy-status`, and `/agy-accounts` via `ctx.commands.register(...)`.
+- **Isolated ACP Profile & Multi-Account**: Reads `~/.agi/acp.json` (each account saved to its own `--gemini-dir` data folder + `--app-data-dir antigravity-acp`) and uses only Google's official unmodified `agy acp` subprocess and `agy acp --login` / official ACP `authenticate` & `logout` RPCs.
 
 ## Install into DeepSeek Harness
 
@@ -35,4 +35,4 @@ node deepseek-harness/plugins/agi/scripts/setup-dsh.mjs --remove
    - **Recommended for ToS compliance in third-party harnesses:** export `GEMINI_API_KEY` (or configure Gemini Enterprise `oauth-business` / `agent-platform`), then run `/agy-connect method gemini-api-key` inside DeepSeek Harness.
    - **Interactive Google sign-in:** run `node deepseek-harness/plugins/agi/scripts/agy-dsh-connect.mjs` (invokes official `agy acp [--gemini-dir ...] [--app-data-dir ...] --login`), then run `/agy-connect refresh`.
 2. Restart DeepSeek Harness (Desktop / Web / CLI) and pick an **`Antigravity (ACP)` (`agy/*`)** model in the model selector.
-3. Use `/agy-connect`, `/agy-models`, and `/agy-status` anytime inside a session.
+3. Use `/agy-connect`, `/agy-models`, `/agy-status`, and `/agy-accounts` (`list | add <name> --data-dir <dir> | use <name> | remove <name>`) anytime inside a session.

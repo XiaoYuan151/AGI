@@ -5,7 +5,7 @@ OpenCode V2 server plugin. No build step: OpenCode loads `src/index.ts` directly
 - `agy` native provider — registered via `ctx.provider.transform` + `ctx.aisdk.hook("sdk" | "language")` backed directly by `agy acp` over stdio (`LanguageModelV3`, no local HTTP daemon needed)
 - Native `/connect` integration — registered via `ctx.integration.transform` with official `agy acp --login` (`type: "command"`), `GEMINI_API_KEY` (`type: "key"`), and `GEMINI_API_KEY` env (`type: "env"`), automatically refreshing models when credentials update
 - `/model` integration — all discovered (or fallback) Antigravity models appear natively under `agy/<model-id>` (with reasoning effort variants)
-- `/agy-connect`, `/agy-models`, `/agy-status` slash commands and `agy_connect`, `agy_status`, `agy_refresh_models` tools
+- `/agy-connect`, `/agy-models`, `/agy-status`, `/agy-accounts` slash commands and `agy_connect`, `agy_accounts`, `agy_status`, `agy_refresh_models` tools
 - Preserves the original `hello_greet` tool and `context` hook
 
 ## Load
@@ -36,13 +36,15 @@ auto-discovered), or point at it explicitly in `opencode.jsonc`:
 - `providerId` (string, default `"agy"`)
 - `providerName` (string, default `"Antigravity (ACP)"`)
 - `agyBin` (string, default `"agy"`)
+- `account` (string, optional named account profile from `~/.agi/acp.json`; defaults to `AGY_ACCOUNT` or active account)
 - `geminiDir` (string, optional `--gemini-dir` passed to `agy acp`; defaults to `AGY_GEMINI_DIR` or `~/.agi/acp.json`)
 - `appDataDir` (string, optional `--app-data-dir` passed to `agy acp`, e.g. `"antigravity-acp"`)
 - `authMethod` (string, optional e.g. `"oauth-personal"` or `"gemini-api-key"`)
 - `autoApprove` (boolean, default `true`)
 - `sandbox` (boolean, default `false`)
 - `showToolActivity` (boolean, default `true`)
-- `discoveryTimeoutMs` (number, default `2500`)
+- `discoveryTimeoutMs` (number, default `1200` — max startup wait before background discovery continues and reloads `/model`)
+- `discoveryRpcTimeoutMs` (number, default `20000` — ACP RPC timeout for `agy acp` model discovery)
 - `fallbackModels` (array or comma-separated string, used before live ACP discovery or when unauthenticated)
 
 ## Test

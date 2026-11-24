@@ -2,7 +2,13 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { AgyAcpClient } from "./lib/agy-acp-client.mjs";
+import {
+  AgyAcpClient,
+  listPersistedAccounts,
+  removePersistedAccount,
+  setActivePersistedAccount,
+  upsertPersistedAccount,
+} from "./lib/agy-acp-client.mjs";
 import { formatAnthropicModelsList } from "./lib/anthropic-adapter.mjs";
 import {
   DEFAULT_CLAUDE_BRIDGE_HOST,
@@ -102,6 +108,54 @@ const TOOLS = [
           type: "string",
           description:
             "Official ACP auth method ID when action='authenticate' (gemini-api-key, oauth-business, agent-platform).",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "agy_accounts",
+    description:
+      "List, add, switch, or remove Antigravity ACP accounts, each saved in its own isolated data folder (--gemini-dir).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "add", "switch", "remove"],
+          description: "Account action to perform (default: 'list').",
+        },
+        name: {
+          type: "string",
+          description: "Account name (e.g. 'default', 'work', 'personal').",
+        },
+        dataDir: {
+          type: "string",
+          description: "Custom data directory path for this account (defaults to ~/.agi/accounts/<name>).",
+        },
+        appDataDir: {
+          type: "string",
+          description: "Optional --app-data-dir name (default: antigravity-acp).",
+        },
+        authMethod: {
+          type: "string",
+          description: "Optional default ACP auth method for this account.",
+        },
+        label: {
+          type: "string",
+          description: "Optional display label for this account.",
+        },
+        activate: {
+          type: "boolean",
+          description: "Switch to the added account immediately (default: true).",
+        },
+        purgeData: {
+          type: "boolean",
+          description: "When action='remove', also delete the account's data folder.",
+        },
+        force: {
+          type: "boolean",
+          description: "Allow reusing a data folder already assigned to another account.",
         },
       },
       additionalProperties: false,
@@ -306,6 +360,130 @@ async function handleToolCall(name, args = {}) {
     }
   }
 
+  if (name === "agy_accounts") {
+    const action = args.action || "list";
+    if (action === "list") {
+      try {
+        const { status, data } = await fetchBridgeJson("/v1/accounts", "GET", 4000);
+        if (status >= 400) {
+          throw new Error(data?.error?.message || `Failed to list accounts (${status})`);
+        }
+        return { bridgeReachable: true, ...data };
+      } catch (err) {
+        if (!/fetch failed|ECONNREFUSED|AbortError/i.test(String(err?.message || ""))) {
+          throw err;
+        }
+        return {
+          ok: true,
+          harness: "claude-code",
+          bridgeReachable: false,
+          ...listPersistedAccounts(process.env),
+        };
+      }
+    }
+
+    if (action === "add") {
+      const payload = {
+        name: args.name,
+        ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+        ...(args.appDataDir !== undefined ? { appDataDir: args.appDataDir } : {}),
+        ...(args.authMethod !== undefined ? { authMethod: args.authMethod } : {}),
+        ...(args.label !== undefined ? { label: args.label } : {}),
+        ...(args.activate !== undefined ? { activate: Boolean(args.activate) } : {}),
+        ...(args.force !== undefined ? { force: Boolean(args.force) } : {}),
+      };
+      try {
+        const { status, data } = await fetchBridgeJson(
+          "/v1/accounts",
+          "POST",
+          10000,
+          payload,
+        );
+        if (status >= 400) {
+          throw new Error(data?.error?.message || `Failed to add account (${status})`);
+        }
+        return { bridgeReachable: true, ...data };
+      } catch (err) {
+        if (!/fetch failed|ECONNREFUSED|AbortError/i.test(String(err?.message || ""))) {
+          throw err;
+        }
+        const added = upsertPersistedAccount(payload, process.env);
+        return {
+          ok: true,
+          bridgeReachable: false,
+          account: added.account,
+          activeAccount: added.activeAccount,
+        };
+      }
+    }
+
+    if (action === "switch") {
+      const accountName = args.name || "";
+      try {
+        const { status, data } = await fetchBridgeJson(
+          "/v1/accounts/switch",
+          "POST",
+          10000,
+          { name: accountName },
+        );
+        if (status >= 400) {
+          throw new Error(data?.error?.message || `Failed to switch account (${status})`);
+        }
+        return { bridgeReachable: true, ...data };
+      } catch (err) {
+        if (!/fetch failed|ECONNREFUSED|AbortError/i.test(String(err?.message || ""))) {
+          throw err;
+        }
+        const switched = setActivePersistedAccount(accountName, process.env);
+        return {
+          ok: true,
+          bridgeReachable: false,
+          account: switched.activeAccount,
+          dataDir: switched.account.geminiDir,
+          geminiDir: switched.account.geminiDir,
+          appDataDir: switched.account.appDataDir,
+        };
+      }
+    }
+
+    if (action === "remove") {
+      const payload = {
+        name: args.name || "",
+        purgeData: Boolean(args.purgeData),
+      };
+      try {
+        const { status, data } = await fetchBridgeJson(
+          "/v1/accounts/remove",
+          "POST",
+          8000,
+          payload,
+        );
+        if (status >= 400) {
+          throw new Error(data?.error?.message || `Failed to remove account (${status})`);
+        }
+        return { bridgeReachable: true, ...data };
+      } catch (err) {
+        if (!/fetch failed|ECONNREFUSED|AbortError/i.test(String(err?.message || ""))) {
+          throw err;
+        }
+        const rm = removePersistedAccount(
+          payload.name,
+          { purgeData: payload.purgeData },
+          process.env,
+        );
+        return {
+          ok: true,
+          bridgeReachable: false,
+          removed: rm.removed,
+          purgedData: rm.purgedData,
+          activeAccount: rm.activeAccount,
+        };
+      }
+    }
+
+    throw new Error(`Unknown agy_accounts action: ${action}`);
+  }
+
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -346,7 +524,7 @@ export function startMcpServer() {
           result: {
             protocolVersion: msg.params?.protocolVersion || "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "agy-claude-mcp", version: "0.2.0" },
+            serverInfo: { name: "agy-claude-mcp", version: "0.3.0" },
           },
         });
         return;

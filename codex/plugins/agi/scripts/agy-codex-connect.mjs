@@ -11,6 +11,8 @@ export function parseConnectArgs(argv) {
   const args = {
     action: "login",
     method: "",
+    account: process.env.AGY_ACCOUNT || "",
+    dataDir: undefined,
     json: false,
     host: process.env.AGY_CODEX_HOST || DEFAULT_CODEX_BRIDGE_HOST,
     port: Number(process.env.AGY_CODEX_PORT || DEFAULT_CODEX_BRIDGE_PORT),
@@ -26,6 +28,10 @@ export function parseConnectArgs(argv) {
       args.action = "refresh";
     } else if (token === "--login" || token === "login") {
       args.action = "login";
+    } else if (token === "--account" && argv[i + 1]) {
+      args.account = argv[++i];
+    } else if ((token === "--data-dir" || token === "--gemini-dir") && argv[i + 1]) {
+      args.dataDir = argv[++i];
     } else if (token === "--method" && argv[i + 1]) {
       args.method = argv[++i];
       if (args.method !== "oauth-personal" && args.method !== "google") {
@@ -63,9 +69,12 @@ export async function runCodexConnect(options = {}) {
   const host = options.host || DEFAULT_CODEX_BRIDGE_HOST;
   const port = options.port || DEFAULT_CODEX_BRIDGE_PORT;
   const action = options.action || "login";
+  const resolvedGeminiDir =
+    options.dataDir !== undefined ? options.dataDir : options.geminiDir;
   const client = new AgyAcpClient({
+    ...(options.account ? { account: options.account } : {}),
     ...(options.agyBin ? { agyBin: options.agyBin } : {}),
-    ...(options.geminiDir !== undefined ? { geminiDir: options.geminiDir } : {}),
+    ...(resolvedGeminiDir !== undefined ? { geminiDir: resolvedGeminiDir } : {}),
     ...(options.appDataDir !== undefined ? { appDataDir: options.appDataDir } : {}),
     ...(options.env ? { env: options.env } : {}),
     ...(options.usePersistedConfig !== undefined
@@ -201,11 +210,13 @@ async function main() {
   if (args.action === "help") {
     console.log(
       [
-        "Usage: agy-codex-connect [--status | --login | --method <id> | --refresh | --logout] [--json]",
+        "Usage: agy-codex-connect [--status | --login | --method <id> | --refresh | --logout] [options]",
         "",
         "Connects Codex's AGI plugin to Google Antigravity ACP using official `agy acp` commands only:",
         "  (default) / --login      Run official interactive `agy acp ... --login` and refresh bridge + agy-models.json",
         "  --method <id>            Authenticate via official ACP `authenticate` (gemini-api-key | oauth-business | agent-platform)",
+        "  --account <name>         Target a named AGI account profile",
+        "  --data-dir <dir>         Override isolated data folder (--gemini-dir)",
         "  --status                 Inspect isolated ACP profile and authentication status",
         "  --refresh                Restart ACP subprocess and refresh bridge models + catalog",
         "  --logout                 Sign out via official ACP `logout` RPC",

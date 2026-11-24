@@ -352,3 +352,72 @@ test("setup-dsh.mjs configures profiles idempotently, creates @local/dsh-agi sym
     fs.rmSync(tmpDshHome, { recursive: true, force: true });
   }
 });
+
+test("DeepSeek Harness /agy-accounts manages multiple accounts in isolated data folders", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-dsh-accounts-"));
+  const agiHome = path.join(tmpRoot, ".agi");
+  const cfgPath = path.join(agiHome, "acp.json");
+  const workDir = path.join(tmpRoot, "work-dir");
+  const sideDir = path.join(tmpRoot, "side-dir");
+  const env = {
+    ...process.env,
+    AGI_HOME: agiHome,
+    AGY_ACP_CONFIG: cfgPath,
+    MOCK_ACP_REQUIRE_AUTH: "1",
+    GEMINI_API_KEY: "",
+  };
+  delete env.AGY_GEMINI_DIR;
+  delete env.AGY_APP_DATA_DIR;
+  delete env.AGY_ACCOUNT;
+
+  const harness = createMockCordisContext();
+  const instance = apply(harness.ctx, {
+    agyBin: MOCK_AGY_BIN,
+    env,
+  });
+
+  try {
+    const accountsCmd = harness.commands.get("agy-accounts");
+    assert.ok(accountsCmd);
+
+    const addWork = await accountsCmd.handler({ rawInput: `add work --data-dir "${workDir}"` });
+    assert.equal(addWork.kind, "success");
+    assert.match(addWork.text, /Added account 'work'/);
+    assert.ok(fs.existsSync(path.join(workDir, ".agi-account.json")));
+
+    // Sign in on 'work'
+    const loginRes = await runDshConnect({
+      action: "login",
+      account: "work",
+      agyBin: MOCK_AGY_BIN,
+      env,
+      stdio: "pipe",
+    });
+    assert.equal(loginRes.ok, true);
+    assert.equal(loginRes.authenticated, true);
+
+    const addSide = await accountsCmd.handler({
+      rawInput: `add side --data-dir "${sideDir}" --no-activate`,
+    });
+    assert.equal(addSide.kind, "success");
+
+    const listOut = await accountsCmd.handler({ rawInput: "list" });
+    assert.equal(listOut.kind, "success");
+    assert.match(listOut.text, /\* work/);
+    assert.match(listOut.text, /side/);
+
+    const useSide = await accountsCmd.handler({ rawInput: "use side" });
+    assert.equal(useSide.kind, "success");
+    assert.match(useSide.text, /Switched active account to 'side'/);
+    assert.match(useSide.text, /authenticated=false/);
+
+    const rmSide = await accountsCmd.handler({ rawInput: "remove side --purge" });
+    assert.equal(rmSide.kind, "success");
+    assert.match(rmSide.text, /purgedData=true/);
+    assert.equal(fs.existsSync(sideDir), false);
+  } finally {
+    await harness.disposeAll();
+    await instance.dispose();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

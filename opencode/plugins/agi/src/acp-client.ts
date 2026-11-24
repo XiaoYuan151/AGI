@@ -4,34 +4,528 @@ import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 
+export interface AgyAccountEntry {
+  name: string;
+  label: string;
+  dataDir: string;
+  geminiDir: string;
+  appDataDir: string;
+  authMethod: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AgyPersistedAcpConfig {
+  version: number;
+  activeAccount: string;
+  geminiDir: string;
+  appDataDir: string;
+  authMethod: string;
+  accounts: Record<string, AgyAccountEntry>;
+}
+
+export function resolveAgiHome(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.AGI_HOME && String(env.AGI_HOME).trim()) {
+    return path.resolve(String(env.AGI_HOME).trim());
+  }
+  return path.join(os.homedir(), ".agi");
+}
+
+export function expandHomePath(inputPath: unknown): string {
+  if (typeof inputPath !== "string") return "";
+  const trimmed = inputPath.trim();
+  if (!trimmed) return "";
+  if (trimmed === "~") return os.homedir();
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.resolve(os.homedir(), trimmed.slice(2));
+  }
+  return path.resolve(trimmed);
+}
+
+export function validateAccountName(name: unknown): string {
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  if (
+    !trimmed ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._@-]{0,63}$/.test(trimmed) ||
+    trimmed.includes("..")
+  ) {
+    throw new Error(
+      `Invalid account name '${String(name ?? "")}': expected 1-64 characters matching [a-zA-Z0-9._@-], starting with alphanumeric, without '..'.`,
+    );
+  }
+  return trimmed;
+}
+
+export function resolveDefaultAccountDataDir(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const validName = validateAccountName(name);
+  const home = resolveAgiHome(env);
+  return validName === "default"
+    ? path.join(home, "antigravity")
+    : path.join(home, "accounts", validName);
+}
+
 export function resolveAcpConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env.AGY_ACP_CONFIG === "0") return "";
   if (env.AGY_ACP_CONFIG && String(env.AGY_ACP_CONFIG).trim()) {
     return path.resolve(String(env.AGY_ACP_CONFIG).trim());
   }
-  const baseDir =
-    env.AGI_HOME && String(env.AGI_HOME).trim()
-      ? path.resolve(String(env.AGI_HOME).trim())
-      : path.join(os.homedir(), ".agi");
-  return path.join(baseDir, "acp.json");
+  return path.join(resolveAgiHome(env), "acp.json");
+}
+
+function normalizeAccountEntry(
+  name: string,
+  rawEntry: Record<string, unknown> = {},
+): AgyAccountEntry {
+  const geminiDir = expandHomePath(
+    typeof rawEntry?.dataDir === "string" && rawEntry.dataDir.trim()
+      ? rawEntry.dataDir
+      : typeof rawEntry?.geminiDir === "string"
+        ? rawEntry.geminiDir
+        : "",
+  );
+  const appDataDir =
+    typeof rawEntry?.appDataDir === "string" ? rawEntry.appDataDir.trim() : "";
+  const authMethod =
+    typeof rawEntry?.authMethod === "string" ? rawEntry.authMethod.trim() : "";
+  const label = typeof rawEntry?.label === "string" ? rawEntry.label.trim() : "";
+  return {
+    name,
+    label,
+    dataDir: geminiDir,
+    geminiDir,
+    appDataDir,
+    authMethod,
+    ...(typeof rawEntry?.createdAt === "string" ? { createdAt: rawEntry.createdAt } : {}),
+    ...(typeof rawEntry?.updatedAt === "string" ? { updatedAt: rawEntry.updatedAt } : {}),
+  };
+}
+
+export function normalizePersistedAcpConfig(
+  raw: unknown = {},
+  _env: NodeJS.ProcessEnv = process.env,
+): AgyPersistedAcpConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      version: 2,
+      activeAccount: "",
+      geminiDir: "",
+      appDataDir: "",
+      authMethod: "",
+      accounts: {},
+    };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const accounts: Record<string, AgyAccountEntry> = {};
+  const hasAccountsObj =
+    obj.accounts && typeof obj.accounts === "object" && !Array.isArray(obj.accounts);
+
+  if (hasAccountsObj) {
+    for (const [rawKey, rawVal] of Object.entries(obj.accounts as Record<string, unknown>)) {
+      if (!rawVal || typeof rawVal !== "object" || Array.isArray(rawVal)) continue;
+      let validName: string;
+      try {
+        validName = validateAccountName(rawKey);
+      } catch {
+        continue;
+      }
+      accounts[validName] = normalizeAccountEntry(validName, rawVal as Record<string, unknown>);
+    }
+  } else {
+    const legacyGeminiDir =
+      typeof obj.geminiDir === "string" ? expandHomePath(obj.geminiDir) : "";
+    const legacyAppDataDir =
+      typeof obj.appDataDir === "string" ? obj.appDataDir.trim() : "";
+    const legacyAuthMethod =
+      typeof obj.authMethod === "string" ? obj.authMethod.trim() : "";
+    if (legacyGeminiDir || legacyAppDataDir || legacyAuthMethod) {
+      const legacyName =
+        typeof obj.activeAccount === "string" && obj.activeAccount.trim()
+          ? obj.activeAccount.trim()
+          : "default";
+      accounts[legacyName] = normalizeAccountEntry(legacyName, {
+        geminiDir: legacyGeminiDir,
+        appDataDir: legacyAppDataDir,
+        authMethod: legacyAuthMethod,
+      });
+    }
+  }
+
+  let activeAccount =
+    typeof obj.activeAccount === "string" ? obj.activeAccount.trim() : "";
+  if (activeAccount && !accounts[activeAccount]) {
+    activeAccount = "";
+  }
+  const names = Object.keys(accounts);
+  if (!activeAccount && names.length > 0) {
+    activeAccount = accounts.default ? "default" : names.sort()[0];
+  }
+
+  const activeEntry = activeAccount ? accounts[activeAccount] : null;
+  const geminiDir = activeEntry
+    ? activeEntry.geminiDir
+    : typeof obj.geminiDir === "string"
+      ? expandHomePath(obj.geminiDir)
+      : "";
+  const appDataDir = activeEntry
+    ? activeEntry.appDataDir
+    : typeof obj.appDataDir === "string"
+      ? obj.appDataDir.trim()
+      : "";
+  const authMethod = activeEntry
+    ? activeEntry.authMethod
+    : typeof obj.authMethod === "string"
+      ? obj.authMethod.trim()
+      : "";
+
+  return {
+    version: 2,
+    activeAccount,
+    geminiDir,
+    appDataDir,
+    authMethod,
+    accounts,
+  };
 }
 
 export function readPersistedAcpConfig(
   env: NodeJS.ProcessEnv = process.env,
-): Record<string, unknown> {
+): AgyPersistedAcpConfig {
   const cfgPath = resolveAcpConfigPath(env);
-  if (!cfgPath) return {};
+  if (!cfgPath) return normalizePersistedAcpConfig({}, env);
   try {
-    if (!fs.existsSync(cfgPath)) return {};
+    if (!fs.existsSync(cfgPath)) return normalizePersistedAcpConfig({}, env);
     const raw = fs.readFileSync(cfgPath, "utf8").trim();
-    if (!raw) return {};
+    if (!raw) return normalizePersistedAcpConfig({}, env);
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
+    return normalizePersistedAcpConfig(parsed, env);
   } catch {
-    return {};
+    return normalizePersistedAcpConfig({}, env);
   }
+}
+
+export function writePersistedAcpConfig(
+  config: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): { configPath: string; config: AgyPersistedAcpConfig } {
+  const cfgPath = resolveAcpConfigPath(env);
+  if (!cfgPath) {
+    throw new Error("Persisted ACP config is disabled (AGY_ACP_CONFIG=0).");
+  }
+  const normalized = normalizePersistedAcpConfig(config, env);
+  const dir = path.dirname(cfgPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    // ignore
+  }
+  const tmpPath = `${cfgPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(normalized, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  fs.renameSync(tmpPath, cfgPath);
+  try {
+    fs.chmodSync(cfgPath, 0o600);
+  } catch {
+    // ignore
+  }
+  return { configPath: cfgPath, config: normalized };
+}
+
+function sortAccountNames(names: string[]): string[] {
+  return [...names].sort((a, b) => {
+    if (a === "default" && b !== "default") return -1;
+    if (b === "default" && a !== "default") return 1;
+    return a.localeCompare(b);
+  });
+}
+
+export function listPersistedAccounts(env: NodeJS.ProcessEnv = process.env) {
+  const configPath = resolveAcpConfigPath(env);
+  const config = readPersistedAcpConfig(env);
+  const names = sortAccountNames(Object.keys(config.accounts || {}));
+  const accounts = names.map((name) => {
+    const entry = config.accounts[name];
+    return {
+      ...entry,
+      active: name === config.activeAccount,
+      dirExists: Boolean(entry.geminiDir && fs.existsSync(entry.geminiDir)),
+    };
+  });
+  return {
+    configPath,
+    activeAccount: config.activeAccount || "",
+    accounts,
+  };
+}
+
+export function upsertPersistedAccount(
+  {
+    name,
+    dataDir,
+    geminiDir,
+    appDataDir,
+    authMethod,
+    label,
+    activate = true,
+    force = false,
+    useDefaultGeminiDir = false,
+  }: {
+    name: string;
+    dataDir?: string;
+    geminiDir?: string;
+    appDataDir?: string;
+    authMethod?: string;
+    label?: string;
+    activate?: boolean;
+    force?: boolean;
+    useDefaultGeminiDir?: boolean;
+  },
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const validName = validateAccountName(name);
+  const config = readPersistedAcpConfig(env);
+  const existing = config.accounts[validName] || null;
+
+  const rawDirInput =
+    typeof dataDir === "string" && dataDir.trim()
+      ? dataDir
+      : typeof geminiDir === "string" && geminiDir.trim()
+        ? geminiDir
+        : "";
+  const targetDir = rawDirInput
+    ? expandHomePath(rawDirInput)
+    : useDefaultGeminiDir
+      ? ""
+      : existing?.geminiDir || resolveDefaultAccountDataDir(validName, env);
+
+  const resolvedAppDataDir =
+    appDataDir !== undefined
+      ? String(appDataDir).trim()
+      : existing?.appDataDir || "antigravity-acp";
+  const resolvedAuthMethod =
+    authMethod !== undefined
+      ? String(authMethod).trim()
+      : existing?.authMethod || "";
+  const resolvedLabel =
+    label !== undefined ? String(label).trim() : existing?.label || "";
+
+  if (!force && targetDir) {
+    const resolvedTarget = path.resolve(targetDir);
+    for (const [otherName, other] of Object.entries(config.accounts)) {
+      if (otherName === validName || !other?.geminiDir) continue;
+      if (
+        path.resolve(other.geminiDir) === resolvedTarget &&
+        (other.appDataDir || "") === resolvedAppDataDir
+      ) {
+        throw new Error(
+          `Data folder '${resolvedTarget}' (appDataDir='${resolvedAppDataDir}') is already used by account '${otherName}'. Pass a different --data-dir or --force to share.`,
+        );
+      }
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const entry: AgyAccountEntry = {
+    name: validName,
+    label: resolvedLabel,
+    dataDir: targetDir,
+    geminiDir: targetDir,
+    appDataDir: resolvedAppDataDir,
+    authMethod: resolvedAuthMethod,
+    createdAt: existing?.createdAt || nowIso,
+    updatedAt: nowIso,
+  };
+
+  if (targetDir) {
+    fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(targetDir, 0o700);
+    } catch {
+      // ignore
+    }
+    const metaPath = path.join(targetDir, ".agi-account.json");
+    fs.writeFileSync(metaPath, `${JSON.stringify(entry, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  }
+
+  config.accounts[validName] = entry;
+  if (activate !== false || !config.activeAccount) {
+    config.activeAccount = validName;
+  }
+
+  const written = writePersistedAcpConfig(config, env);
+  return {
+    configPath: written.configPath,
+    account: written.config.accounts[validName],
+    activeAccount: written.config.activeAccount,
+    config: written.config,
+  };
+}
+
+export function setActivePersistedAccount(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const validName = validateAccountName(name);
+  const config = readPersistedAcpConfig(env);
+  const entry = config.accounts[validName];
+  if (!entry) {
+    const available = sortAccountNames(Object.keys(config.accounts || {}));
+    throw new Error(
+      `Account '${validName}' does not exist.${
+        available.length > 0 ? ` Available accounts: ${available.join(", ")}` : ""
+      }`,
+    );
+  }
+  const previousAccount = config.activeAccount || "";
+  config.activeAccount = validName;
+  const written = writePersistedAcpConfig(config, env);
+  return {
+    configPath: written.configPath,
+    previousAccount,
+    activeAccount: validName,
+    account: written.config.accounts[validName],
+    config: written.config,
+  };
+}
+
+export function removePersistedAccount(
+  name: string,
+  { purgeData = false }: { purgeData?: boolean } = {},
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const validName = validateAccountName(name);
+  const config = readPersistedAcpConfig(env);
+  const entry = config.accounts[validName];
+  if (!entry) {
+    const available = sortAccountNames(Object.keys(config.accounts || {}));
+    throw new Error(
+      `Account '${validName}' does not exist.${
+        available.length > 0 ? ` Available accounts: ${available.join(", ")}` : ""
+      }`,
+    );
+  }
+
+  delete config.accounts[validName];
+  const remainingNames = sortAccountNames(Object.keys(config.accounts));
+  if (config.activeAccount === validName) {
+    config.activeAccount = remainingNames[0] || "";
+  }
+  if (remainingNames.length === 0) {
+    config.geminiDir = "";
+    config.appDataDir = "";
+    config.authMethod = "";
+  }
+
+  let didPurge = false;
+  if (purgeData && entry.geminiDir) {
+    const resolvedTarget = path.resolve(entry.geminiDir);
+    const agiHome = path.resolve(resolveAgiHome(env));
+    const userHome = path.resolve(os.homedir());
+    const fsRoot = path.parse(resolvedTarget).root;
+    const accountsRoot = path.join(agiHome, "accounts");
+    if (
+      resolvedTarget === fsRoot ||
+      resolvedTarget === userHome ||
+      resolvedTarget === agiHome ||
+      resolvedTarget === accountsRoot
+    ) {
+      throw new Error(
+        `Refusing to purge protected directory '${resolvedTarget}' for account '${validName}'.`,
+      );
+    }
+    const stillUsedByAnother = remainingNames.some(
+      (other) =>
+        config.accounts[other]?.geminiDir &&
+        path.resolve(config.accounts[other].geminiDir) === resolvedTarget,
+    );
+    if (!stillUsedByAnother && fs.existsSync(resolvedTarget)) {
+      fs.rmSync(resolvedTarget, { recursive: true, force: true });
+      didPurge = true;
+    }
+  }
+
+  const written = writePersistedAcpConfig(config, env);
+  const activeEntry = written.config.activeAccount
+    ? written.config.accounts[written.config.activeAccount] || null
+    : null;
+  return {
+    configPath: written.configPath,
+    removed: entry,
+    purgedData: didPurge,
+    activeAccount: written.config.activeAccount,
+    activeEntry,
+    config: written.config,
+  };
+}
+
+export function resolveAccountProfile({
+  account,
+  geminiDir,
+  appDataDir,
+  authMethod,
+  env = process.env,
+  usePersistedConfig = true,
+}: {
+  account?: string;
+  geminiDir?: string;
+  appDataDir?: string;
+  authMethod?: string;
+  env?: NodeJS.ProcessEnv;
+  usePersistedConfig?: boolean;
+} = {}) {
+  const persisted = usePersistedConfig
+    ? readPersistedAcpConfig(env)
+    : normalizePersistedAcpConfig({}, env);
+  const requestedAccount = String(
+    account ?? env.AGY_ACCOUNT ?? persisted.activeAccount ?? "",
+  ).trim();
+  const accountEntry =
+    requestedAccount && persisted.accounts?.[requestedAccount]
+      ? persisted.accounts[requestedAccount]
+      : null;
+
+  const resolvedGeminiDir = expandHomePath(
+    String(
+      geminiDir ??
+        env.AGY_GEMINI_DIR ??
+        accountEntry?.geminiDir ??
+        persisted.geminiDir ??
+        "",
+    ),
+  );
+  const resolvedAppDataDir = String(
+    appDataDir ??
+      env.AGY_APP_DATA_DIR ??
+      accountEntry?.appDataDir ??
+      persisted.appDataDir ??
+      "",
+  ).trim();
+  const resolvedAuthMethod = String(
+    authMethod ??
+      env.AGY_AUTH_METHOD ??
+      accountEntry?.authMethod ??
+      persisted.authMethod ??
+      "",
+  ).trim();
+
+  return {
+    account: requestedAccount,
+    accountEntry,
+    geminiDir: resolvedGeminiDir,
+    appDataDir: resolvedAppDataDir,
+    authMethod: resolvedAuthMethod,
+    activeAccount: persisted.activeAccount || "",
+    accounts: persisted.accounts || {},
+  };
 }
 
 export function buildLoginCommandArgs(options: {
@@ -126,6 +620,7 @@ export interface AgyTurnResult {
 }
 
 export interface AgyClientOptions {
+  account?: string;
   agyBin?: string;
   geminiDir?: string;
   appDataDir?: string;
@@ -317,6 +812,168 @@ export function parseFallbackModels(rawValue: unknown): AgyModelSpec[] {
   return DEFAULT_FALLBACK_MODELS.map((m) => ({ ...m, efforts: [...m.efforts] }));
 }
 
+export function resolveModelsCachePath(env: NodeJS.ProcessEnv = process.env): string {
+  if (!resolveAcpConfigPath(env)) return "";
+  return path.join(resolveAgiHome(env), "models-cache.json");
+}
+
+function readModelsCacheFile(env: NodeJS.ProcessEnv = process.env): {
+  version: number;
+  entries: Record<string, Record<string, unknown>>;
+} {
+  const cachePath = resolveModelsCachePath(env);
+  if (!cachePath) return { version: 1, entries: {} };
+  try {
+    if (!fs.existsSync(cachePath)) return { version: 1, entries: {} };
+    const raw = fs.readFileSync(cachePath, "utf8").trim();
+    if (!raw) return { version: 1, entries: {} };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      parsed.entries &&
+      typeof parsed.entries === "object" &&
+      !Array.isArray(parsed.entries)
+    ) {
+      return {
+        version: 1,
+        entries: parsed.entries as Record<string, Record<string, unknown>>,
+      };
+    }
+  } catch {
+    // Ignore corrupt cache files
+  }
+  return { version: 1, entries: {} };
+}
+
+function writeModelsCacheFile(
+  cache: { version: number; entries: Record<string, Record<string, unknown>> },
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const cachePath = resolveModelsCachePath(env);
+  if (!cachePath) return false;
+  let tmpPath = "";
+  try {
+    const dir = path.dirname(cachePath);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch {
+      // ignore
+    }
+    tmpPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, `${JSON.stringify(cache, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    fs.renameSync(tmpPath, cachePath);
+    tmpPath = "";
+    try {
+      fs.chmodSync(cachePath, 0o600);
+    } catch {
+      // ignore
+    }
+    return true;
+  } catch {
+    if (tmpPath) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // ignore
+      }
+    }
+    return false;
+  }
+}
+
+export function readCachedDiscovery(
+  cacheKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AgyDiscoveryResult | null {
+  if (!cacheKey) return null;
+  const cache = readModelsCacheFile(env);
+  const entry = cache.entries?.[cacheKey];
+  if (!entry || typeof entry !== "object") return null;
+  const models = parseFallbackModels(entry.models);
+  if (!Array.isArray(entry.models) || entry.models.length === 0 || models.length === 0) {
+    return null;
+  }
+  const hasRealEntry = entry.models.every(
+    (m) => m && typeof m === "object" && typeof (m as { id?: unknown }).id === "string",
+  );
+  if (!hasRealEntry) return null;
+
+  return {
+    models: models.map((m) => ({ ...m, efforts: [...m.efforts] })),
+    source: "acp",
+    authenticated: entry.authenticated === true ? true : null,
+    modelConfigId: typeof entry.modelConfigId === "string" ? entry.modelConfigId : null,
+    currentModelId:
+      typeof entry.currentModelId === "string" ? entry.currentModelId : models[0]?.id || null,
+    effortConfig:
+      entry.effortConfig && typeof entry.effortConfig === "object"
+        ? (entry.effortConfig as AgyEffortConfig)
+        : null,
+    agentInfo:
+      entry.agentInfo && typeof entry.agentInfo === "object"
+        ? (entry.agentInfo as Record<string, unknown>)
+        : null,
+    authMethods: Array.isArray(entry.authMethods)
+      ? (entry.authMethods as Array<Record<string, unknown>>)
+      : [],
+  };
+}
+
+export function writeCachedDiscovery(
+  cacheKey: string,
+  discovery: AgyDiscoveryResult | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (
+    !cacheKey ||
+    !discovery ||
+    discovery.source !== "acp" ||
+    !Array.isArray(discovery.models) ||
+    discovery.models.length === 0
+  ) {
+    return false;
+  }
+  const cache = readModelsCacheFile(env);
+  cache.entries[cacheKey] = {
+    updatedAt: Date.now(),
+    authenticated: discovery.authenticated === true,
+    modelConfigId: discovery.modelConfigId || null,
+    currentModelId: discovery.currentModelId || discovery.models[0]?.id || null,
+    effortConfig: discovery.effortConfig || null,
+    agentInfo: discovery.agentInfo || null,
+    authMethods: Array.isArray(discovery.authMethods) ? discovery.authMethods : [],
+    models: discovery.models.map((m) => ({
+      id: m.id,
+      name: m.name,
+      description: m.description,
+      contextWindow: m.contextWindow,
+      maxOutputTokens: m.maxOutputTokens,
+      supportsImages: m.supportsImages,
+      efforts: [...m.efforts],
+    })),
+  };
+  return writeModelsCacheFile(cache, env);
+}
+
+export function clearCachedDiscoveryEntry(
+  cacheKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!cacheKey) return false;
+  const cachePath = resolveModelsCachePath(env);
+  if (!cachePath || !fs.existsSync(cachePath)) return false;
+  const cache = readModelsCacheFile(env);
+  if (!cache.entries?.[cacheKey]) return false;
+  delete cache.entries[cacheKey];
+  return writeModelsCacheFile(cache, env);
+}
+
 function flattenSelectOptions(options: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(options)) return [];
   const out: Array<Record<string, unknown>> = [];
@@ -422,6 +1079,20 @@ export function extractModelsFromSessionResult(
     }
   }
 
+  const hasConfigOptionModels = byId.size > 0;
+  const knownEffortSuffixes = Array.from(
+    new Set([
+      ...effortValues.map((v) => String(v).toLowerCase()),
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]),
+  ).sort((a, b) => b.length - a.length);
+  const matchedEffortsByBase = new Map<string, Set<string>>();
+
   const legacyModels = result?.models as Record<string, unknown> | undefined;
   if (legacyModels && typeof legacyModels === "object") {
     if (!currentModelId && typeof legacyModels.currentModelId === "string") {
@@ -436,6 +1107,32 @@ export function extractModelsFromSessionResult(
       if (typeof rawId !== "string") continue;
       const id = normalizeModelId(rawId);
       if (!id || byId.has(id)) continue;
+
+      if (hasConfigOptionModels) {
+        const lowerId = id.toLowerCase();
+        let matchedBaseId = "";
+        let matchedSuffix = "";
+        for (const suffix of knownEffortSuffixes) {
+          if (lowerId.endsWith(`-${suffix}`) && id.length > suffix.length + 1) {
+            const candidateBase = id.slice(0, id.length - suffix.length - 1);
+            if (byId.has(candidateBase)) {
+              matchedBaseId = candidateBase;
+              matchedSuffix = suffix;
+              break;
+            }
+          }
+        }
+        if (matchedBaseId) {
+          let set = matchedEffortsByBase.get(matchedBaseId);
+          if (!set) {
+            set = new Set<string>();
+            matchedEffortsByBase.set(matchedBaseId, set);
+          }
+          set.add(matchedSuffix);
+          continue;
+        }
+      }
+
       byId.set(id, {
         id,
         name: typeof item.name === "string" && item.name ? item.name : id,
@@ -450,6 +1147,22 @@ export function extractModelsFromSessionResult(
         supportsImages: item.supportsImages !== false,
         efforts: [...effortValues],
       });
+    }
+  }
+
+  for (const [baseId, matchedSet] of matchedEffortsByBase) {
+    const model = byId.get(baseId);
+    if (!model || matchedSet.size === 0) continue;
+    const ordered = effortValues.filter((e) => matchedSet.has(String(e).toLowerCase()));
+    const seenLower = new Set(ordered.map((e) => String(e).toLowerCase()));
+    for (const extra of matchedSet) {
+      if (!seenLower.has(extra)) {
+        ordered.push(extra);
+        seenLower.add(extra);
+      }
+    }
+    if (ordered.length > 0) {
+      model.efforts = ordered;
     }
   }
 
@@ -534,13 +1247,14 @@ function selectPermissionOutcome(
 }
 
 export class AgyAcpClient {
-  readonly env: NodeJS.ProcessEnv;
+  env: NodeJS.ProcessEnv;
   readonly agyBin: string;
-  readonly geminiDir: string;
-  readonly appDataDir: string;
+  account: string;
+  geminiDir: string;
+  appDataDir: string;
   readonly sandbox: boolean;
   readonly autoApprove: boolean;
-  readonly authMethod: string;
+  authMethod: string;
   readonly defaultCwd: string;
   readonly rpcTimeoutMs: number;
   readonly discoveryTtlMs: number;
@@ -549,6 +1263,12 @@ export class AgyAcpClient {
   readonly maxSessions: number;
   readonly fallbackModels: AgyModelSpec[];
   readonly extraArgs: string[];
+
+  private _usePersistedConfig: boolean;
+  private _explicitAccount: string;
+  private _explicitGeminiDir: boolean;
+  private _explicitAppDataDir: boolean;
+  private _explicitAuthMethod: boolean;
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private rl: readline.Interface | null = null;
@@ -559,6 +1279,7 @@ export class AgyAcpClient {
   private authenticated: boolean | null = null;
   private lastDiscovery: AgyDiscoveryResult | null = null;
   private lastDiscoveryAt = 0;
+  private discoveryPromise: Promise<AgyDiscoveryResult> | null = null;
   private lastError: string | null = null;
   private lastPolicyError: string | null = null;
   private authCooldownUntil = 0;
@@ -571,19 +1292,26 @@ export class AgyAcpClient {
 
   constructor(options: AgyClientOptions = {}) {
     this.env = options.env || process.env;
-    const persisted =
-      options.usePersistedConfig === false ? {} : readPersistedAcpConfig(this.env);
+    this._usePersistedConfig = options.usePersistedConfig !== false;
+    this._explicitAccount =
+      options.account !== undefined ? String(options.account).trim() : "";
+    this._explicitGeminiDir = options.geminiDir !== undefined;
+    this._explicitAppDataDir = options.appDataDir !== undefined;
+    this._explicitAuthMethod = options.authMethod !== undefined;
+
+    const resolved = resolveAccountProfile({
+      account: options.account,
+      geminiDir: options.geminiDir,
+      appDataDir: options.appDataDir,
+      authMethod: options.authMethod,
+      env: this.env,
+      usePersistedConfig: this._usePersistedConfig,
+    });
+
     this.agyBin = options.agyBin || this.env.AGY_BIN || "agy";
-    this.geminiDir = String(
-      options.geminiDir ??
-        this.env.AGY_GEMINI_DIR ??
-        (typeof persisted.geminiDir === "string" ? persisted.geminiDir : ""),
-    ).trim();
-    this.appDataDir = String(
-      options.appDataDir ??
-        this.env.AGY_APP_DATA_DIR ??
-        (typeof persisted.appDataDir === "string" ? persisted.appDataDir : ""),
-    ).trim();
+    this.account = resolved.account;
+    this.geminiDir = resolved.geminiDir;
+    this.appDataDir = resolved.appDataDir;
     this.sandbox =
       typeof options.sandbox === "boolean"
         ? options.sandbox
@@ -592,11 +1320,7 @@ export class AgyAcpClient {
       typeof options.autoApprove === "boolean"
         ? options.autoApprove
         : this.env.AGY_AUTO_APPROVE !== "0";
-    this.authMethod = String(
-      options.authMethod ??
-        this.env.AGY_AUTH_METHOD ??
-        (typeof persisted.authMethod === "string" ? persisted.authMethod : ""),
-    ).trim();
+    this.authMethod = resolved.authMethod;
     this.defaultCwd = options.cwd || process.cwd();
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? 30000;
     this.discoveryTtlMs = options.discoveryTtlMs ?? 60000;
@@ -649,6 +1373,167 @@ export class AgyAcpClient {
     this.authCooldownUntil = 0;
     this.policyCooldownUntil = 0;
     this.lastPolicyError = null;
+  }
+
+  getAuthInfo(): Record<string, unknown> {
+    const login = this.getLoginCommand();
+    return {
+      authenticated: this.authenticated,
+      authMethods: Array.isArray(this.initResult?.authMethods)
+        ? this.initResult.authMethods
+        : [],
+      canLogout: Boolean(
+        (this.initResult?.agentCapabilities as { auth?: { logout?: unknown } } | undefined)
+          ?.auth?.logout,
+      ),
+      loginCommand: login.command,
+      loginBin: login.bin,
+      loginArgs: login.args,
+      agyBin: this.agyBin,
+      account: this.account || null,
+      dataDir: this.geminiDir || null,
+      geminiDir: this.geminiDir || null,
+      appDataDir: this.appDataDir || null,
+      authMethod: this.authMethod || null,
+      hasGeminiApiKey: Boolean(
+        this.env.GEMINI_API_KEY && String(this.env.GEMINI_API_KEY).trim(),
+      ),
+    };
+  }
+
+  listAccounts() {
+    const listed = listPersistedAccounts(this.env);
+    return {
+      ...listed,
+      currentAccount: this.account || null,
+      currentDataDir: this.geminiDir || null,
+      accounts: listed.accounts.map((entry) => ({
+        ...entry,
+        isCurrent:
+          Boolean(this.account && entry.name === this.account) ||
+          Boolean(
+            !this.account &&
+              entry.geminiDir &&
+              this.geminiDir &&
+              path.resolve(entry.geminiDir) === path.resolve(this.geminiDir) &&
+              (entry.appDataDir || "") === (this.appDataDir || ""),
+          ),
+      })),
+    };
+  }
+
+  reloadPersistedConfig({ account }: { account?: string } = {}) {
+    if (!this._usePersistedConfig && account === undefined) {
+      return {
+        changed: false,
+        account: this.account,
+        dataDir: this.geminiDir,
+        geminiDir: this.geminiDir,
+        appDataDir: this.appDataDir,
+        authMethod: this.authMethod,
+      };
+    }
+    if (account !== undefined) {
+      const nextAcct = String(account).trim();
+      this._explicitAccount = nextAcct;
+      const nextEnv: NodeJS.ProcessEnv = { ...this.env };
+      if (nextAcct) {
+        nextEnv.AGY_ACCOUNT = nextAcct;
+      } else {
+        delete nextEnv.AGY_ACCOUNT;
+      }
+      this.env = nextEnv;
+    } else if (this._explicitAccount) {
+      const cfg = readPersistedAcpConfig(this.env);
+      if (!cfg.accounts?.[this._explicitAccount]) {
+        this._explicitAccount = cfg.activeAccount || "";
+        const nextEnv: NodeJS.ProcessEnv = { ...this.env };
+        if (this._explicitAccount) {
+          nextEnv.AGY_ACCOUNT = this._explicitAccount;
+        } else {
+          delete nextEnv.AGY_ACCOUNT;
+        }
+        this.env = nextEnv;
+      }
+    }
+    const targetAccount =
+      account !== undefined ? String(account).trim() : this._explicitAccount || undefined;
+    const resolved = resolveAccountProfile({
+      account: targetAccount,
+      geminiDir: account === undefined && this._explicitGeminiDir ? this.geminiDir : undefined,
+      appDataDir: account === undefined && this._explicitAppDataDir ? this.appDataDir : undefined,
+      authMethod: account === undefined && this._explicitAuthMethod ? this.authMethod : undefined,
+      env: this.env,
+      usePersistedConfig: account !== undefined ? true : this._usePersistedConfig,
+    });
+    const changed =
+      resolved.account !== this.account ||
+      resolved.geminiDir !== this.geminiDir ||
+      resolved.appDataDir !== this.appDataDir ||
+      resolved.authMethod !== this.authMethod;
+    this.account = resolved.account;
+    this.geminiDir = resolved.geminiDir;
+    this.appDataDir = resolved.appDataDir;
+    this.authMethod = resolved.authMethod;
+    if (changed) {
+      this.authenticated = null;
+      this.lastDiscovery = null;
+      this.lastDiscoveryAt = 0;
+      this.discoveryPromise = null;
+    }
+    return {
+      changed,
+      account: this.account,
+      dataDir: this.geminiDir,
+      geminiDir: this.geminiDir,
+      appDataDir: this.appDataDir,
+      authMethod: this.authMethod,
+    };
+  }
+
+  async switchAccount(
+    name: string,
+    { persist = true }: { persist?: boolean } = {},
+  ) {
+    const validName = validateAccountName(name);
+    let entry: AgyAccountEntry | undefined;
+    if (persist && this._usePersistedConfig) {
+      entry = setActivePersistedAccount(validName, this.env).account;
+    } else {
+      const cfg = readPersistedAcpConfig(this.env);
+      entry = cfg.accounts?.[validName];
+      if (!entry) {
+        throw new Error(`Account '${validName}' does not exist.`);
+      }
+    }
+
+    const nextEnv: NodeJS.ProcessEnv = { ...this.env };
+    delete nextEnv.AGY_GEMINI_DIR;
+    delete nextEnv.AGY_APP_DATA_DIR;
+    delete nextEnv.AGY_AUTH_METHOD;
+    nextEnv.AGY_ACCOUNT = entry.name;
+    this.env = nextEnv;
+
+    this._explicitAccount = entry.name;
+    this._explicitGeminiDir = false;
+    this._explicitAppDataDir = false;
+    this._explicitAuthMethod = false;
+    this.account = entry.name;
+    this.geminiDir = entry.geminiDir;
+    this.appDataDir = entry.appDataDir;
+    this.authMethod = entry.authMethod || "";
+    this.authenticated = null;
+
+    await this.restart();
+    return {
+      ok: true,
+      account: entry.name,
+      dataDir: entry.geminiDir,
+      geminiDir: entry.geminiDir,
+      appDataDir: entry.appDataDir,
+      authMethod: entry.authMethod || "",
+      loginCommand: this.formatLoginCommand(),
+    };
   }
 
   async setApiKey(apiKey: string | null | undefined): Promise<boolean> {
@@ -890,7 +1775,7 @@ export class AgyAcpClient {
           clientCapabilities: {},
           clientInfo: {
             name: "agi-opencode-acp-plugin",
-            version: "0.2.0",
+            version: "0.3.0",
           },
         },
         timeoutMs,
@@ -910,6 +1795,7 @@ export class AgyAcpClient {
     await this.initialize(timeoutMs);
     const result = await this._request("authenticate", { methodId }, timeoutMs);
     this.authenticated = true;
+    this.lastDiscoveryAt = 0;
     this.clearCooldown();
     return result;
   }
@@ -930,8 +1816,7 @@ export class AgyAcpClient {
     await Promise.all(sessionIds.map((id) => this._closeSessionBestEffort(id)));
     await this._request("logout", {}, timeoutMs);
     this.authenticated = false;
-    this.lastDiscovery = null;
-    this.lastDiscoveryAt = 0;
+    this.clearCachedDiscovery();
     this.clearCooldown();
     return { ok: true, supported: true };
   }
@@ -1035,10 +1920,31 @@ export class AgyAcpClient {
     }
   }
 
+  private _getModelsCacheKey(): string {
+    return `${this.agyBin}::${this.geminiDir || "default"}::${this.appDataDir || "default"}`;
+  }
+
+  getCachedDiscovery(): AgyDiscoveryResult | null {
+    if (this.lastDiscovery?.source === "acp" && this.lastDiscovery.models.length > 0) {
+      return this.lastDiscovery;
+    }
+    if (!this._usePersistedConfig) return null;
+    return readCachedDiscovery(this._getModelsCacheKey(), this.env);
+  }
+
+  clearCachedDiscovery(): void {
+    this.lastDiscovery = null;
+    this.lastDiscoveryAt = 0;
+    this.discoveryPromise = null;
+    if (this._usePersistedConfig) {
+      clearCachedDiscoveryEntry(this._getModelsCacheKey(), this.env);
+    }
+  }
+
   async discoverModels({
     cwd,
     forceRefresh = false,
-    timeoutMs = 2500,
+    timeoutMs = 20000,
   }: { cwd?: string; forceRefresh?: boolean; timeoutMs?: number } = {}): Promise<AgyDiscoveryResult> {
     const now = Date.now();
     if (
@@ -1048,55 +1954,135 @@ export class AgyAcpClient {
     ) {
       return this.lastDiscovery;
     }
+    if (!forceRefresh && this.discoveryPromise) {
+      return this.discoveryPromise;
+    }
 
+    const cacheKey = this._getModelsCacheKey();
+    const run = (async (): Promise<AgyDiscoveryResult> => {
+      try {
+        const sessionRes = await this._createSessionRaw(
+          cwd || this.defaultCwd,
+          timeoutMs,
+          { bypassAuthCooldown: forceRefresh },
+        );
+        const sessionId = String(sessionRes.sessionId || "");
+        const extracted = extractModelsFromSessionResult(sessionRes);
+        await this._closeSessionBestEffort(sessionId);
+
+        const models =
+          extracted.models.length > 0
+            ? extracted.models
+            : this.fallbackModels.map((m) => ({ ...m, efforts: [...m.efforts] }));
+
+        this.lastError = null;
+        this.lastDiscovery = {
+          models,
+          source: extracted.models.length > 0 ? "acp" : "fallback",
+          authenticated: true,
+          modelConfigId: extracted.modelConfigId,
+          currentModelId: extracted.currentModelId || models[0]?.id || null,
+          effortConfig: extracted.effortConfig,
+          agentInfo: (this.initResult?.agentInfo as Record<string, unknown>) || null,
+          authMethods: Array.isArray(this.initResult?.authMethods)
+            ? (this.initResult.authMethods as Array<Record<string, unknown>>)
+            : [],
+        };
+        this.lastDiscoveryAt = Date.now();
+        if (this._usePersistedConfig && this.lastDiscovery.source === "acp") {
+          writeCachedDiscovery(cacheKey, this.lastDiscovery, this.env);
+        }
+        return this.lastDiscovery;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.lastError = message;
+
+        if (isAuthError(err)) {
+          if (this._usePersistedConfig) {
+            clearCachedDiscoveryEntry(cacheKey, this.env);
+          }
+          this.authenticated = false;
+          this.lastDiscovery = {
+            models: this.fallbackModels.map((m) => ({ ...m, efforts: [...m.efforts] })),
+            source: "fallback",
+            authenticated: false,
+            modelConfigId: null,
+            currentModelId: this.fallbackModels[0]?.id || null,
+            effortConfig: null,
+            agentInfo: (this.initResult?.agentInfo as Record<string, unknown>) || null,
+            authMethods: Array.isArray(this.initResult?.authMethods)
+              ? (this.initResult.authMethods as Array<Record<string, unknown>>)
+              : [],
+            error: message,
+          };
+          this.lastDiscoveryAt = Date.now();
+          return this.lastDiscovery;
+        }
+
+        const prevAcp =
+          this.lastDiscovery?.source === "acp"
+            ? this.lastDiscovery
+            : this._usePersistedConfig
+              ? readCachedDiscovery(cacheKey, this.env)
+              : null;
+
+        if (isPolicyOrQuotaError(err)) {
+          this.lastDiscovery = prevAcp
+            ? {
+                ...prevAcp,
+                authenticated: this.authenticated,
+                error: message,
+              }
+            : {
+                models: this.fallbackModels.map((m) => ({ ...m, efforts: [...m.efforts] })),
+                source: "fallback",
+                authenticated: this.authenticated,
+                modelConfigId: null,
+                currentModelId: this.fallbackModels[0]?.id || null,
+                effortConfig: null,
+                agentInfo: (this.initResult?.agentInfo as Record<string, unknown>) || null,
+                authMethods: Array.isArray(this.initResult?.authMethods)
+                  ? (this.initResult.authMethods as Array<Record<string, unknown>>)
+                  : [],
+                error: message,
+              };
+          this.lastDiscoveryAt = Date.now();
+          return this.lastDiscovery;
+        }
+
+        // Transient error (timeout / spawn hiccup): preserve last live ACP catalog if known
+        // and keep lastDiscoveryAt = 0 so callers do not get stuck on fallback for 60s.
+        this.lastDiscovery = prevAcp
+          ? {
+              ...prevAcp,
+              authenticated: this.authenticated,
+              error: message,
+            }
+          : {
+              models: this.fallbackModels.map((m) => ({ ...m, efforts: [...m.efforts] })),
+              source: "fallback",
+              authenticated: this.authenticated,
+              modelConfigId: null,
+              currentModelId: this.fallbackModels[0]?.id || null,
+              effortConfig: null,
+              agentInfo: (this.initResult?.agentInfo as Record<string, unknown>) || null,
+              authMethods: Array.isArray(this.initResult?.authMethods)
+                ? (this.initResult.authMethods as Array<Record<string, unknown>>)
+                : [],
+              error: message,
+            };
+        this.lastDiscoveryAt = 0;
+        return this.lastDiscovery;
+      }
+    })();
+
+    this.discoveryPromise = run;
     try {
-      const sessionRes = await this._createSessionRaw(
-        cwd || this.defaultCwd,
-        timeoutMs,
-        { bypassAuthCooldown: forceRefresh },
-      );
-      const sessionId = String(sessionRes.sessionId || "");
-      const extracted = extractModelsFromSessionResult(sessionRes);
-      await this._closeSessionBestEffort(sessionId);
-
-      const models =
-        extracted.models.length > 0
-          ? extracted.models
-          : this.fallbackModels.map((m) => ({ ...m, efforts: [...m.efforts] }));
-
-      this.lastError = null;
-      this.lastDiscovery = {
-        models,
-        source: extracted.models.length > 0 ? "acp" : "fallback",
-        authenticated: true,
-        modelConfigId: extracted.modelConfigId,
-        currentModelId: extracted.currentModelId || models[0]?.id || null,
-        effortConfig: extracted.effortConfig,
-        agentInfo: (this.initResult?.agentInfo as Record<string, unknown>) || null,
-        authMethods: Array.isArray(this.initResult?.authMethods)
-          ? (this.initResult.authMethods as Array<Record<string, unknown>>)
-          : [],
-      };
-      this.lastDiscoveryAt = Date.now();
-      return this.lastDiscovery;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.lastError = message;
-      this.lastDiscovery = {
-        models: this.fallbackModels.map((m) => ({ ...m, efforts: [...m.efforts] })),
-        source: "fallback",
-        authenticated: isAuthError(err) ? false : this.authenticated,
-        modelConfigId: null,
-        currentModelId: this.fallbackModels[0]?.id || null,
-        effortConfig: null,
-        agentInfo: (this.initResult?.agentInfo as Record<string, unknown>) || null,
-        authMethods: Array.isArray(this.initResult?.authMethods)
-          ? (this.initResult.authMethods as Array<Record<string, unknown>>)
-          : [],
-        error: message,
-      };
-      this.lastDiscoveryAt = Date.now();
-      return this.lastDiscovery;
+      return await run;
+    } finally {
+      if (this.discoveryPromise === run) {
+        this.discoveryPromise = null;
+      }
     }
   }
 
@@ -1409,6 +2395,8 @@ export class AgyAcpClient {
       running: Boolean(this.proc && !this.proc.killed && this.proc.exitCode === null),
       pid: this.proc?.pid ?? null,
       agyBin: this.agyBin,
+      account: this.account || null,
+      dataDir: this.geminiDir || null,
       geminiDir: this.geminiDir || null,
       appDataDir: this.appDataDir || null,
       loginCommand: this.formatLoginCommand(),
@@ -1483,6 +2471,7 @@ export class AgyAcpClient {
     await this._shutdownProcess("AgyAcpClient restarted");
     this.lastDiscovery = null;
     this.lastDiscoveryAt = 0;
+    this.discoveryPromise = null;
     this.clearCooldown();
   }
 

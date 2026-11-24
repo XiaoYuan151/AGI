@@ -1,4 +1,6 @@
 import { describe, expect, test, mock } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const MOCK_AGY_BIN = path.resolve(import.meta.dir, "fixtures", "mock-agy");
@@ -273,6 +275,12 @@ function createMockContext(options = {}, { activeConnection = null, resolvedCred
 
 describe("OpenCode agi + agy acp integration", () => {
   test("registers native agy provider, streams LanguageModelV3, switches models, and keeps hello_greet", async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-oc-basic-"));
+    const prevAgiHome = process.env.AGI_HOME;
+    const prevCfg = process.env.AGY_ACP_CONFIG;
+    process.env.AGI_HOME = path.join(tmpRoot, ".agi");
+    process.env.AGY_ACP_CONFIG = "0";
+
     const harness = createMockContext({
       greeting: "Hey",
       agyBin: MOCK_AGY_BIN,
@@ -384,12 +392,22 @@ describe("OpenCode agi + agy acp integration", () => {
       expect(harness.synthetics[1].text).toContain("Antigravity ACP status");
     } finally {
       await cleanup();
+      if (prevAgiHome === undefined) delete process.env.AGI_HOME;
+      else process.env.AGI_HOME = prevAgiHome;
+      if (prevCfg === undefined) delete process.env.AGY_ACP_CONFIG;
+      else process.env.AGY_ACP_CONFIG = prevCfg;
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
 
   test("integrates official agy acp sign-in with OpenCode native /connect and refreshes on credential update", async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-oc-connect-"));
+    const prevAgiHome = process.env.AGI_HOME;
+    const prevCfg = process.env.AGY_ACP_CONFIG;
     const prevRequireAuth = process.env.MOCK_ACP_REQUIRE_AUTH;
     const prevApiKey = process.env.GEMINI_API_KEY;
+    process.env.AGI_HOME = path.join(tmpRoot, ".agi");
+    process.env.AGY_ACP_CONFIG = "0";
     process.env.MOCK_ACP_REQUIRE_AUTH = "1";
     delete process.env.GEMINI_API_KEY;
 
@@ -460,10 +478,176 @@ describe("OpenCode agi + agy acp integration", () => {
       expect(harness.synthetics.some((s) => s.text.includes("Signed out of Antigravity ACP"))).toBe(true);
     } finally {
       await cleanup();
+      if (prevAgiHome === undefined) delete process.env.AGI_HOME;
+      else process.env.AGI_HOME = prevAgiHome;
+      if (prevCfg === undefined) delete process.env.AGY_ACP_CONFIG;
+      else process.env.AGY_ACP_CONFIG = prevCfg;
       if (prevRequireAuth === undefined) delete process.env.MOCK_ACP_REQUIRE_AUTH;
       else process.env.MOCK_ACP_REQUIRE_AUTH = prevRequireAuth;
       if (prevApiKey === undefined) delete process.env.GEMINI_API_KEY;
       else process.env.GEMINI_API_KEY = prevApiKey;
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("manages multi-account profiles via /agy-accounts command and agy_accounts tool", async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-oc-accounts-"));
+    const agiHome = path.join(tmpRoot, ".agi");
+    const cfgPath = path.join(agiHome, "acp.json");
+    const workDir = path.join(tmpRoot, "oc-work");
+    const sideDir = path.join(tmpRoot, "oc-side");
+    const prevAgiHome = process.env.AGI_HOME;
+    const prevCfg = process.env.AGY_ACP_CONFIG;
+    process.env.AGI_HOME = agiHome;
+    process.env.AGY_ACP_CONFIG = cfgPath;
+
+    const harness = createMockContext({
+      agyBin: MOCK_AGY_BIN,
+      discoveryTimeoutMs: 2500,
+    });
+    const cleanup = await agiPlugin.setup(harness.ctx);
+    try {
+      const accountsTool = harness.tools.get("accounts");
+      const accountsCmd = harness.commands.get("agy-accounts");
+      expect(accountsTool).toBeDefined();
+      expect(accountsCmd).toBeDefined();
+
+      const added = JSON.parse(
+        (await accountsTool.execute({ action: "add", name: "work", dataDir: workDir })).content,
+      );
+      expect(added.ok).toBe(true);
+      expect(added.activeAccount).toBe("work");
+      expect(fs.existsSync(path.join(workDir, ".agi-account.json"))).toBe(true);
+
+      await accountsCmd.execute({
+        sessionID: "oc_sess_acct",
+        arguments: `add side --data-dir "${sideDir}" --no-activate`,
+      });
+      await accountsCmd.execute({ sessionID: "oc_sess_acct", arguments: "list" });
+      expect(harness.synthetics.some((s) => s.text.includes("`work`"))).toBe(true);
+      expect(harness.synthetics.some((s) => s.text.includes("`side`"))).toBe(true);
+
+      const switched = JSON.parse(
+        (await accountsTool.execute({ action: "switch", name: "side" })).content,
+      );
+      expect(switched.account).toBe("side");
+      expect(switched.dataDir).toBe(sideDir);
+
+      const removed = JSON.parse(
+        (await accountsTool.execute({ action: "remove", name: "side", purgeData: true })).content,
+      );
+      expect(removed.purgedData).toBe(true);
+      expect(removed.activeAccount).toBe("work");
+      expect(fs.existsSync(sideDir)).toBe(false);
+    } finally {
+      await cleanup();
+      if (prevAgiHome === undefined) delete process.env.AGI_HOME;
+      else process.env.AGI_HOME = prevAgiHome;
+      if (prevCfg === undefined) delete process.env.AGY_ACP_CONFIG;
+      else process.env.AGY_ACP_CONFIG = prevCfg;
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("seeds from cache, finishes slow ACP discovery in background via provider.reload(), deduplicates variants, and preserves env GEMINI_API_KEY", async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-oc-modern-"));
+    const agiHome = path.join(tmpRoot, ".agi");
+    const cfgPath = path.join(agiHome, "acp.json");
+    const dataDir = path.join(agiHome, "antigravity");
+
+    const prevAgiHome = process.env.AGI_HOME;
+    const prevCfg = process.env.AGY_ACP_CONFIG;
+    const prevDelay = process.env.MOCK_ACP_SESSION_DELAY_MS;
+    const prevDual = process.env.MOCK_ACP_DUAL_MODELS;
+    const prevRequireAuth = process.env.MOCK_ACP_REQUIRE_AUTH;
+    const prevApiKey = process.env.GEMINI_API_KEY;
+
+    process.env.AGI_HOME = agiHome;
+    process.env.AGY_ACP_CONFIG = cfgPath;
+    process.env.MOCK_ACP_SESSION_DELAY_MS = "300";
+    process.env.MOCK_ACP_DUAL_MODELS = "1";
+    process.env.MOCK_ACP_REQUIRE_AUTH = "1";
+    process.env.GEMINI_API_KEY = "env-tos-key";
+
+    try {
+      // 1. Setup returns well before slow session/new completes so OpenCode plugin activation never times out
+      const harness1 = createMockContext({
+        agyBin: MOCK_AGY_BIN,
+        geminiDir: dataDir,
+        appDataDir: "antigravity-acp",
+        discoveryTimeoutMs: 60,
+        discoveryRpcTimeoutMs: 4000,
+      });
+
+      const t0 = Date.now();
+      const cleanup1 = await agiPlugin.setup(harness1.ctx);
+      const setupElapsedMs = Date.now() - t0;
+      try {
+        expect(setupElapsedMs).toBeLessThan(260);
+        // Initially seeded with fallback while background discovery finishes
+        expect(harness1.providers.get("agy").models.has("gemini-2.5-pro")).toBe(true);
+
+        // Wait for background ACP discovery to complete & trigger ctx.provider.reload()
+        for (let i = 0; i < 60; i++) {
+          if (harness1.providers.get("agy").models.has("gemini-4-neon")) break;
+          await new Promise((r) => setTimeout(r, 40));
+        }
+
+        const prov1 = harness1.providers.get("agy");
+        expect(harness1.reloadCalls).toBeGreaterThanOrEqual(1);
+        expect(prov1.models.has("gemini-4-neon")).toBe(true);
+        expect(prov1.models.has("gemini-4-carbon")).toBe(true);
+        expect(prov1.models.has("gemini-3.8-flash")).toBe(true);
+        expect(prov1.models.has("gpt-oss-120b-medium")).toBe(true);
+        // No flattened effort duplicates in /model
+        expect(prov1.models.has("gemini-4-neon-high")).toBe(false);
+        expect(prov1.models.has("gemini-4-neon-xhigh")).toBe(false);
+        // Per-model variants preserved
+        expect(prov1.models.get("gemini-4-neon").variants.map((v) => v.id)).toEqual([
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+        ]);
+        expect(prov1.models.get("gemini-3.8-flash").variants.map((v) => v.id)).toEqual([
+          "low",
+          "medium",
+          "high",
+        ]);
+      } finally {
+        await cleanup1();
+      }
+
+      // 2. Subsequent startup with discoveryTimeoutMs=0 immediately seeds modern models from models-cache.json
+      const harness2 = createMockContext({
+        agyBin: MOCK_AGY_BIN,
+        geminiDir: dataDir,
+        appDataDir: "antigravity-acp",
+        discoveryTimeoutMs: 0,
+      });
+      const cleanup2 = await agiPlugin.setup(harness2.ctx);
+      try {
+        const prov2 = harness2.providers.get("agy");
+        expect(prov2.models.has("gemini-4-neon")).toBe(true);
+        expect(prov2.models.has("gemini-3.8-flash")).toBe(true);
+        expect(prov2.models.has("gemini-4-neon-high")).toBe(false);
+      } finally {
+        await cleanup2();
+      }
+    } finally {
+      if (prevAgiHome === undefined) delete process.env.AGI_HOME;
+      else process.env.AGI_HOME = prevAgiHome;
+      if (prevCfg === undefined) delete process.env.AGY_ACP_CONFIG;
+      else process.env.AGY_ACP_CONFIG = prevCfg;
+      if (prevDelay === undefined) delete process.env.MOCK_ACP_SESSION_DELAY_MS;
+      else process.env.MOCK_ACP_SESSION_DELAY_MS = prevDelay;
+      if (prevDual === undefined) delete process.env.MOCK_ACP_DUAL_MODELS;
+      else process.env.MOCK_ACP_DUAL_MODELS = prevDual;
+      if (prevRequireAuth === undefined) delete process.env.MOCK_ACP_REQUIRE_AUTH;
+      else process.env.MOCK_ACP_REQUIRE_AUTH = prevRequireAuth;
+      if (prevApiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevApiKey;
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
 });

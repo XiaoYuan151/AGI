@@ -4,7 +4,7 @@
 
 Anti-Gravity Integration (AGI) es un plugin para Claude Code, Codex, OpenCode, DeepSeek Harness, Neuro SDK y otros harnesses que lleva los modelos avanzados de Gemini a todos ellos.
 
-Instala el plugin una vez, inicia sesión con el comando nativo de tu herramienta y elige un modelo Antigravity desde `/model`. Puedes alternar entre modelos de Antigravity y tus modelos habituales en medio de una conversación.
+Instala el plugin una vez, inicia sesión con el comando nativo de tu herramienta y elige un modelo Antigravity desde `/model`. Puedes alternar entre modelos de Antigravity y tus modelos habituales en medio de una conversación, actualizar todo con un solo comando y gestionar múltiples cuentas en carpetas de datos separadas.
 
 | Harness | Comando de conexión | IDs en `/model` | Carpeta del plugin |
 | --- | --- | --- | --- |
@@ -15,13 +15,28 @@ Instala el plugin una vez, inicia sesión con el comando nativo de tu herramient
 
 ---
 
-## Instalación
+## Instalación y actualización
 
 Requisitos: **Node.js 18+** y el CLI oficial **Antigravity (`agy`)** en tu `PATH`.
 
 ### Instalación rápida
 
-Ejecuta el instalador para abrir un selector interactivo (flechas o `j`/`k` para moverte, `Espacio` para marcar, `a` para seleccionar todo, `Enter` para confirmar) y elegir qué herramientas configurar:
+**Vía npx / GitHub (sin instalación global):**
+
+```bash
+npx xiaoyuan151/agi install
+```
+
+O instala globalmente con npm:
+
+```bash
+npm install -g @xiaoyuan151/agi
+agi install
+# o ejecuta directamente desde npm:
+npx @xiaoyuan151/agi install
+```
+
+**Vía script de shell:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash
@@ -35,23 +50,38 @@ cd AGI
 ./install.sh
 ```
 
+El instalador abre un selector interactivo (flechas o `j`/`k` para moverte, `Espacio` para marcar, `a` para seleccionar todo, `Enter` para confirmar) para elegir qué herramientas configurar.
+
 Opciones útiles (con `curl`, pásalas después de `bash -s --`):
 
 ```bash
-./install.sh -a opencode,dsh              # instalar solo ciertos harnesses (claude | codex | opencode | dsh | all)
-./install.sh --all --yes                  # instalar todos sin preguntar
-./install.sh --claude --local-token       # Claude Code sin cuenta de Anthropic
-./install.sh --codex --codex-mode default # añadir agy a tu config por defecto en lugar de usar `-p agy`
-./install.sh --dsh --dsh-profile desktop  # apuntar a un perfil concreto de DeepSeek Harness
-./install.sh --dry-run                    # ver qué cambiaría sin tocar archivos
-./install.sh --uninstall                  # elegir qué desinstalar (añade --purge para borrar ~/.agi)
+agi install -a opencode,dsh              # instalar solo ciertos harnesses (claude | codex | opencode | dsh | all)
+agi install --all --yes                  # instalar todos sin preguntar
+agi install --claude --local-token       # Claude Code sin cuenta de Anthropic
+agi install --codex --codex-mode default # añadir agy a tu config por defecto en lugar de `-p agy`
+agi install --dsh --dsh-profile desktop  # apuntar a un perfil concreto de DeepSeek Harness
+agi install --dry-run                    # ver qué cambiaría sin tocar archivos
+agi uninstall --purge                    # desinstalar plugins y borrar ~/.agi
+```
+
+(Todas las opciones anteriores también funcionan con `./install.sh`.)
+
+### Actualización
+
+Actualiza el repositorio o paquete npm, refresca los plugins/configuraciones instalados y reinicia los puentes conservando tus herramientas elegidas, opciones y todas tus cuentas:
+
+```bash
+agi update                  # actualiza plugins y config (añade --self para actualizar el paquete global)
+agi update --check          # comprueba si hay actualizaciones disponibles
+./install.sh --update       # actualiza desde git/remoto y refresca los harnesses configurados
+curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash -s -- --update
 ```
 
 ---
 
-## Autenticación
+## Autenticación y múltiples cuentas
 
-AGI usa únicamente el CLI oficial `agy acp` y guarda su sesión por separado en `~/.agi/`.
+AGI usa únicamente el CLI oficial `agy acp` y guarda el estado de cada cuenta en su propia carpeta de datos aislada (`--gemini-dir`), registrada en `~/.agi/acp.json`.
 
 Puedes iniciar sesión con cualquiera de las dos opciones:
 
@@ -60,13 +90,30 @@ Puedes iniciar sesión con cualquiera de las dos opciones:
 
 Si aún no has iniciado sesión, `/model` mostrará una lista base de Gemini. Al autenticarte y actualizar, aparecerá el catálogo completo de tu cuenta.
 
+### Gestión de múltiples cuentas (carpetas separadas)
+
+Añade cuentas independientes en carpetas de datos separadas (por defecto `~/.agi/accounts/<name>`, o especifica cualquier ruta con `--data-dir`):
+
+```bash
+agi account add work --data-dir ~/agy-accounts/work --login
+agi account add personal --login
+agi account list --probe
+agi account use work        # cambia la cuenta activa y actualiza los puentes en ejecución
+agi account remove work --purge
+```
+
+También funciona con `./install.sh account ...` (o `--add-account`, `--list-accounts`, `--use-account`, `--remove-account`). Dentro de cada herramienta puedes gestionarlas con:
+
+- **Claude Code / Codex**: herramienta MCP `agy_accounts` (`list` | `add` | `switch` | `remove`)
+- **OpenCode / DeepSeek Harness**: comando `/agy-accounts` (`list` | `add <name> --data-dir <dir>` | `use <name>` | `remove <name>`)
+
 ---
 
 ## Uso por herramienta
 
 ### Claude Code
 
-Si usaste `./install.sh`, el plugin y el puente local ya quedan configurados. Para hacerlo manualmente:
+Si usaste `agi install` o `./install.sh`, el plugin y el puente local ya quedan configurados. Para hacerlo manualmente:
 
 ```bash
 claude --plugin-dir ./claude-code/plugins/agi
@@ -75,9 +122,9 @@ claude --plugin-dir ./claude-code/plugins/agi
 
 Reinicia `claude`, ejecuta `/agi:connect` para iniciar sesión o revisar el estado y abre `/model` para elegir `anthropic-agy/...`. Tus claves de Anthropic y modelos `claude-*` siguen funcionando con normalidad.
 
-Para actualizar la lista de modelos usa `/agi:agy-models`, y para revertir los cambios ejecuta `./claude-code/plugins/agi/bin/agy-claude-setup --scope user --remove`.
+Para actualizar la lista de modelos usa `/agi:agy-models`, y para revertir los cambios ejecuta `agy-claude-setup --scope user --remove`.
 
-> ¿Sin cuenta de Anthropic? Añade `--auth-mode local-token` a `agy-claude-setup` (o `--local-token` a `install.sh`).
+> ¿Sin cuenta de Anthropic? Añade `--auth-mode local-token` a `agy-claude-setup` (o `--local-token` a `agi install` / `install.sh`).
 
 ### Codex
 
@@ -111,7 +158,7 @@ Copia `opencode/plugins/agi` a `.opencode/plugins/agi/` en tu proyecto o añáde
 }
 ```
 
-Dentro de OpenCode, ejecuta `/connect`, selecciona **Antigravity (ACP)** e inicia sesión con `agy acp --login` o `GEMINI_API_KEY`. Los modelos aparecerán en `/model` y `opencode models`. También tienes `/agy-connect` (`status` | `refresh` | `logout`) y `/agy-models`.
+Dentro de OpenCode, ejecuta `/connect`, selecciona **Antigravity (ACP)** e inicia sesión con `agy acp --login` o `GEMINI_API_KEY`. Los modelos aparecerán en `/model` y `opencode models`. También tienes `/agy-connect` (`status` | `refresh` | `logout`), `/agy-models` y `/agy-accounts`.
 
 ### DeepSeek Harness
 
@@ -121,7 +168,7 @@ Para enlazarlo manualmente:
 node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
 ```
 
-Reinicia DeepSeek Harness, usa `/agy-connect` para revisar el estado o iniciar sesión (por ejemplo, `/agy-connect method gemini-api-key` o `node ./deepseek-harness/plugins/agi/scripts/agy-dsh-connect.mjs`) y elige `agy/<model>` en el selector. También incluye `/agy-models` y `/agy-status`.
+Reinicia DeepSeek Harness, usa `/agy-connect` para revisar el estado o iniciar sesión (por ejemplo, `/agy-connect method gemini-api-key` o `agy-dsh-connect`) y elige `agy/<model>` en el selector. También incluye `/agy-models`, `/agy-status` y `/agy-accounts`.
 
 ---
 
@@ -129,6 +176,8 @@ Reinicia DeepSeek Harness, usa `/agy-connect` para revisar el estado o iniciar s
 
 | Variable | Por defecto | Descripción |
 | --- | --- | --- |
+| `AGI_HOME` | `~/.agi` | Directorio de estado compartido (`acp.json`, `install.json`, `accounts/`) |
+| `AGY_ACCOUNT` | cuenta activa en `acp.json` | Nombre del perfil de cuenta activo |
 | `AGY_BIN` | `agy` | Ruta al binario `agy` |
 | `GEMINI_API_KEY` | — | Clave de API de Gemini opcional |
 | `AGY_GEMINI_DIR` | `~/.agi/antigravity` | Carpeta separada para ACP |

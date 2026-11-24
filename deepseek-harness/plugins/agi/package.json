@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-agi",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DeepSeek Harness plugin integrating Google Antigravity ACP (agy acp) as a native LLM provider with /agy-connect, /agy-models, and /agy-status commands.",
   "type": "module",
   "main": "src/index.mjs",

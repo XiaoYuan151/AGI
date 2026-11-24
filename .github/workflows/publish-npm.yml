@@ -1,0 +1,149 @@
+name: Publish npm package
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: "npm dist-tag override (defaults to 'next' for prerelease versions, else 'latest')"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Run npm publish --dry-run without publishing to npmjs.com"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Verify tests and package tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Verify package and plugin manifest versions
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const rootPkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const expectedVersion = rootPkg.version;
+            if (!expectedVersion) {
+              throw new Error("Missing version in package.json");
+            }
+
+            const eventName = process.env.GITHUB_EVENT_NAME || "";
+            const refType = process.env.GITHUB_REF_TYPE || "";
+            const refName = process.env.GITHUB_REF_NAME || "";
+            const releaseTag = process.env.RELEASE_TAG || "";
+            const tag = releaseTag || (refType === "tag" ? refName : "");
+            if (tag) {
+              const normalizedTag = tag.replace(/^v/, "");
+              if (normalizedTag !== expectedVersion) {
+                throw new Error(
+                  `Tag ${tag} (${normalizedTag}) does not match package.json version (${expectedVersion})`,
+                );
+              }
+            }
+
+            const manifests = [
+              "claude-code/plugins/agi/.claude-plugin/plugin.json",
+              "codex/plugins/agi/plugin.json",
+              "opencode/plugins/agi/package.json",
+              "deepseek-harness/plugins/agi/package.json",
+            ];
+            for (const file of manifests) {
+              const data = JSON.parse(fs.readFileSync(file, "utf8"));
+              if (data.version !== expectedVersion) {
+                throw new Error(
+                  `Version mismatch in ${file}: expected ${expectedVersion}, got ${data.version}`,
+                );
+              }
+            }
+            console.log(`Verified version ${expectedVersion} across package.json and all plugin manifests (event=${eventName || "local"}).`);
+          '
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+
+      - name: Run Node.js test suite
+        run: npm test
+
+      - name: Run OpenCode plugin test suite (Bun)
+        run: npm run test:opencode
+
+      - name: Verify npm tarball contents
+        run: npm run pack:check
+
+  publish:
+    name: Publish @xiaoyuan151/agi to npmjs.com
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Determine package metadata and dist-tag
+        id: meta
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const explicitTag = (process.env.INPUT_DIST_TAG || "").trim();
+            const distTag = explicitTag || (pkg.version.includes("-") ? "next" : "latest");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `name=${pkg.name}\nversion=${pkg.version}\ndist_tag=${distTag}\n`);
+          '
+        env:
+          INPUT_DIST_TAG: ${{ inputs.dist_tag }}
+
+      - name: Check if version is already published
+        id: check_published
+        shell: bash
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if npm view "${{ steps.meta.outputs.name }}@${{ steps.meta.outputs.version }}" version --registry=https://registry.npmjs.org --userconfig=/dev/null >/dev/null 2>&1; then
+            echo "Package ${{ steps.meta.outputs.name }}@${{ steps.meta.outputs.version }} is already published on npmjs.com; skipping."
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npmjs.com
+        if: steps.check_published.outputs.already_published != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          ARGS=(--access public --tag "${{ steps.meta.outputs.dist_tag }}")
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npm publish --dry-run "${ARGS[@]}"
+          else
+            if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+              npm install -g npm@latest
+            fi
+            npm publish --provenance "${ARGS[@]}"
+          fi
