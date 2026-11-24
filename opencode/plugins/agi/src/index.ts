@@ -1,4 +1,4 @@
-import { Model, Plugin, Provider } from "@opencode/plugin";
+import * as OpenCode from "@opencode/plugin";
 import {
   AgyAcpClient,
   type AgyDiscoveryResult,
@@ -6,6 +6,17 @@ import {
   parseFallbackModels,
 } from "./acp-client";
 import { createAgyLanguageModel } from "./language-model";
+
+const { Model, Plugin, Provider } = OpenCode;
+
+function makeIntegrationID(id: string): OpenCode.Integration.ID {
+  const integrationNs = OpenCode.Integration as
+    | { ID?: { make?: (value: string) => OpenCode.Integration.ID } }
+    | undefined;
+  return typeof integrationNs?.ID?.make === "function"
+    ? integrationNs.ID.make(id)
+    : (id as unknown as OpenCode.Integration.ID);
+}
 
 function asBoolean(value: unknown, fallback: boolean): boolean {
   if (typeof value === "boolean") return value;
@@ -90,6 +101,7 @@ export default Plugin.define({
     const fallbackModels = parseFallbackModels(ctx.options.fallbackModels);
 
     const providerID = Provider.ID.make(providerIdStr);
+    const integrationID = makeIntegrationID(providerIdStr);
     const client = new AgyAcpClient({
       agyBin,
       geminiDir: geminiDir || undefined,
@@ -113,7 +125,36 @@ export default Plugin.define({
     };
     let disposed = false;
 
+    const syncIntegrationConnection = async () => {
+      const connApi = ctx.integration?.connection;
+      if (!connApi) return null;
+      try {
+        const active = await connApi.active(providerIdStr);
+        if (!active) {
+          await client.setApiKey(null);
+          return null;
+        }
+        if (active.type === "credential") {
+          const resolved = await connApi.resolve(active);
+          if (resolved && resolved.type === "key" && typeof resolved.key === "string") {
+            await client.setApiKey(resolved.key);
+          } else {
+            await client.setApiKey(null);
+          }
+        } else {
+          await client.setApiKey(null);
+        }
+        return active;
+      } catch {
+        return null;
+      }
+    };
+
     const refreshCatalog = async (forceRefresh: boolean, timeoutMs = 4000) => {
+      const activeConnection = await syncIntegrationConnection();
+      if (forceRefresh) {
+        client.clearCooldown();
+      }
       const prevSig = modelsSignature(currentDiscovery.models);
       const next = await client.discoverModels({
         cwd: ctx.location.directory,
@@ -121,6 +162,30 @@ export default Plugin.define({
         timeoutMs,
       });
       currentDiscovery = next;
+
+      if (activeConnection && ctx.integration?.connection?.status) {
+        try {
+          if (next.authenticated === false) {
+            await ctx.integration.connection.status({
+              integrationID: providerIdStr,
+              connection: activeConnection,
+              status: {
+                status: "needs_auth",
+                message: `Authenticate ${providerName} via /connect or run '${client.formatLoginCommand()}'`,
+              },
+            });
+          } else if (next.authenticated === true) {
+            await ctx.integration.connection.status({
+              integrationID: providerIdStr,
+              connection: activeConnection,
+              status: undefined,
+            });
+          }
+        } catch {
+          // Best-effort connection status reporting
+        }
+      }
+
       const nextSig = modelsSignature(next.models);
       if (!disposed && prevSig !== nextSig) {
         await ctx.provider.reload().catch(() => {});
@@ -134,6 +199,7 @@ export default Plugin.define({
       if (existing) {
         editor.update(providerID, (prov) => {
           prov.name = providerName;
+          prov.integrationID = integrationID;
           prov.activation = "enabled";
           prov.package = "agy-acp";
         });
@@ -142,6 +208,7 @@ export default Plugin.define({
         editor.add({
           info: {
             id: providerID,
+            integrationID,
             name: providerName,
             activation: "enabled",
             package: "agy-acp",
@@ -150,6 +217,41 @@ export default Plugin.define({
         });
       }
     });
+
+    const integrationTransform =
+      ctx.integration && typeof ctx.integration.transform === "function"
+        ? await ctx.integration.transform((editor) => {
+            if (editor.get(providerIdStr)) {
+              editor.update(providerIdStr, (item) => {
+                item.name = providerName;
+              });
+            }
+            const loginCmd = client.getLoginCommand();
+            editor.method.update({
+              integrationID: providerIdStr,
+              method: {
+                id: "agy-acp-login",
+                type: "command",
+                label: "Sign in with Google (official agy acp --login)",
+                command: [loginCmd.bin, ...loginCmd.args],
+              },
+            });
+            editor.method.update({
+              integrationID: providerIdStr,
+              method: {
+                type: "key",
+                label: "Gemini API Key (GEMINI_API_KEY — recommended for ToS compliance)",
+              },
+            });
+            editor.method.update({
+              integrationID: providerIdStr,
+              method: {
+                type: "env",
+                names: ["GEMINI_API_KEY"],
+              },
+            });
+          })
+        : null;
 
     const sdkHook = await ctx.aisdk.hook(
       "sdk",
@@ -313,9 +415,170 @@ export default Plugin.define({
           };
         },
       });
+
+      editor.add({
+        name: "connect",
+        description:
+          "Inspect or manage official Antigravity ACP authentication (integrated with OpenCode's native /connect command).",
+        input: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              enum: ["status", "refresh", "authenticate", "logout"],
+              description: "Auth action to perform (default: status).",
+            },
+            methodId: {
+              type: "string",
+              description:
+                "Official ACP auth method ID when action='authenticate' (e.g. gemini-api-key, oauth-business, agent-platform).",
+            },
+          },
+          additionalProperties: false,
+        },
+        options: { namespace: "agy", codemode: true },
+        execute: async (input) => {
+          const args = (input && typeof input === "object" ? input : {}) as {
+            action?: string;
+            methodId?: string;
+          };
+          const action = args.action || "status";
+          if (action === "logout") {
+            const logoutRes = await client.logout(8000);
+            const discovery = await refreshCatalog(true, 4000);
+            return {
+              content: JSON.stringify(
+                {
+                  action: "logout",
+                  logout: logoutRes,
+                  authenticated: discovery.authenticated,
+                  loginCommand: client.formatLoginCommand(),
+                },
+                null,
+                2,
+              ),
+            };
+          }
+          if (action === "authenticate") {
+            const methodId =
+              typeof args.methodId === "string" && args.methodId.trim()
+                ? args.methodId.trim()
+                : "gemini-api-key";
+            await client.authenticate(methodId, 10000);
+            const discovery = await refreshCatalog(true, 8000);
+            return {
+              content: JSON.stringify(
+                {
+                  action: "authenticate",
+                  methodId,
+                  authenticated: discovery.authenticated,
+                  modelsCount: discovery.models.length,
+                },
+                null,
+                2,
+              ),
+            };
+          }
+          if (action === "refresh") {
+            await client.restart();
+            const discovery = await refreshCatalog(true, 8000);
+            return {
+              content: JSON.stringify(
+                {
+                  action: "refresh",
+                  authenticated: discovery.authenticated,
+                  source: discovery.source,
+                  modelsCount: discovery.models.length,
+                  error: discovery.error || null,
+                },
+                null,
+                2,
+              ),
+            };
+          }
+          const status = client.status();
+          return {
+            content: JSON.stringify(
+              {
+                provider: providerIdStr,
+                integrationID: providerIdStr,
+                nativeCommand: "/connect",
+                authenticated: currentDiscovery.authenticated,
+                authMethods: currentDiscovery.authMethods,
+                loginCommand: client.formatLoginCommand(),
+                canLogout: status.canLogout,
+                geminiDir: status.geminiDir,
+                appDataDir: status.appDataDir,
+                tosNote:
+                  "Uses Google's official unmodified `agy acp` stdio protocol and `agy acp --login`. For automated/third-party harness usage, GEMINI_API_KEY or Gemini Enterprise (oauth-business / agent-platform) is recommended.",
+              },
+              null,
+              2,
+            ),
+          };
+        },
+      });
     });
 
     const commands = await ctx.command.transform((editor) => {
+      editor.add({
+        name: "agy-connect",
+        description:
+          "Sign in to Antigravity ACP (links to native /connect, or run with 'refresh' / 'logout')",
+        execute: async (input) => {
+          const arg = String((input as { arguments?: unknown })?.arguments || "")
+            .trim()
+            .toLowerCase();
+          if (arg === "logout" || arg === "--logout") {
+            const logoutRes = await client.logout(8000);
+            await refreshCatalog(true, 4000);
+            await ctx.session.synthetic({
+              sessionID: input.sessionID,
+              text: logoutRes.ok
+                ? `Signed out of Antigravity ACP via official ACP logout.\nRun \`/connect\` (select ${providerName}) or \`${client.formatLoginCommand()}\` to sign in again.`
+                : `Could not sign out via ACP RPC: ${logoutRes.message || "unsupported"}.`,
+              resume: false,
+            });
+            return;
+          }
+          if (arg === "refresh" || arg === "--refresh") {
+            await client.restart();
+            const res = await refreshCatalog(true, 8000);
+            await ctx.session.synthetic({
+              sessionID: input.sessionID,
+              text: [
+                `Antigravity ACP connection refreshed (authenticated: ${String(res.authenticated)}, source: ${res.source}, models: ${res.models.length}).`,
+                ...(res.error ? [`Note: ${res.error}`] : []),
+              ].join("\n"),
+              resume: false,
+            });
+            return;
+          }
+          const res = await refreshCatalog(false, 4000);
+          const status = client.status();
+          const lines = [
+            `Antigravity ACP sign-in is integrated with OpenCode's native \`/connect\` command:`,
+            `1. Run \`/connect\` and choose **${providerName}** (\`${providerIdStr}\`).`,
+            `2. Pick either:`,
+            `   - **Sign in with Google (official \`agy acp --login\`)** — runs \`${client.formatLoginCommand()}\``,
+            `   - **Gemini API Key (\`GEMINI_API_KEY\`)** — recommended for Google ToS compliance in third-party harnesses`,
+            ``,
+            `Current status:`,
+            `- authenticated: ${String(res.authenticated)} (${res.models.length} models, source: ${res.source})`,
+            `- isolated profile: --gemini-dir ${String(status.geminiDir || "(default ~/.gemini)")} --app-data-dir ${String(status.appDataDir || "antigravity-cli")}`,
+            `- subcommands: \`/agy-connect refresh\` | \`/agy-connect logout\``,
+          ];
+          if (res.error) {
+            lines.push(`- note: ${res.error}`);
+          }
+          await ctx.session.synthetic({
+            sessionID: input.sessionID,
+            text: lines.join("\n"),
+            resume: false,
+          });
+        },
+      });
+
       editor.add({
         name: "agy-models",
         description: "Refresh and list Antigravity (agy acp) models available in /model",
@@ -351,6 +614,7 @@ export default Plugin.define({
             `- authenticated: ${String(currentDiscovery.authenticated)}`,
             `- activeSessions: ${String(status.activeSessions)}`,
             `- modelsCount: ${currentDiscovery.models.length} (${currentDiscovery.source})`,
+            `- connect: /connect (${providerName}) or \`${client.formatLoginCommand()}\``,
           ];
           if (currentDiscovery.error) {
             lines.push(`- error: ${currentDiscovery.error}`);
@@ -363,6 +627,26 @@ export default Plugin.define({
         },
       });
     });
+
+    // React to OpenCode native /connect credential updates automatically.
+    const eventAbort = new AbortController();
+    if (ctx.event && typeof ctx.event.subscribe === "function") {
+      void (async () => {
+        try {
+          const stream = ctx.event.subscribe({
+            types: ["credential.updated"],
+            signal: eventAbort.signal,
+          });
+          for await (const _evt of stream) {
+            if (disposed || eventAbort.signal.aborted) break;
+            await client.restart().catch(() => {});
+            await refreshCatalog(true, 8000).catch(() => {});
+          }
+        } catch {
+          // Subscription ended or aborted during plugin cleanup
+        }
+      })();
+    }
 
     // Fast bounded background/initial probe so OpenCode startup never hangs.
     if (discoveryTimeoutMs > 0) {
@@ -381,6 +665,7 @@ export default Plugin.define({
 
     return async () => {
       disposed = true;
+      eventAbort.abort();
       await commands.dispose();
       await tools.dispose();
       await generateHook.dispose();
@@ -389,6 +674,9 @@ export default Plugin.define({
       await contextHook.dispose();
       await languageHook.dispose();
       await sdkHook.dispose();
+      if (integrationTransform) {
+        await integrationTransform.dispose();
+      }
       await providerTransform.dispose();
       await client.dispose();
     };

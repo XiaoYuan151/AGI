@@ -3,8 +3,9 @@
 OpenCode V2 server plugin. No build step: OpenCode loads `src/index.ts` directly.
 
 - `agy` native provider — registered via `ctx.provider.transform` + `ctx.aisdk.hook("sdk" | "language")` backed directly by `agy acp` over stdio (`LanguageModelV3`, no local HTTP daemon needed)
+- Native `/connect` integration — registered via `ctx.integration.transform` with official `agy acp --login` (`type: "command"`), `GEMINI_API_KEY` (`type: "key"`), and `GEMINI_API_KEY` env (`type: "env"`), automatically refreshing models when credentials update
 - `/model` integration — all discovered (or fallback) Antigravity models appear natively under `agy/<model-id>` (with reasoning effort variants)
-- `/agy-models`, `/agy-status` slash commands and `agy_status`, `agy_refresh_models` tools
+- `/agy-connect`, `/agy-models`, `/agy-status` slash commands and `agy_connect`, `agy_status`, `agy_refresh_models` tools
 - Preserves the original `hello_greet` tool and `context` hook
 
 ## Load
@@ -46,9 +47,9 @@ auto-discovered), or point at it explicitly in `opencode.jsonc`:
 
 ## Test
 
-1. Make sure `agy` is authenticated (`agy acp --login` or `GEMINI_API_KEY`).
+1. Inside OpenCode, run `/connect`, pick **Antigravity (ACP)**, and authenticate using official `agy acp --login` or a `GEMINI_API_KEY` (recommended for Google ToS compliance in third-party harnesses).
 2. Run `opencode models` to verify `agy/*` models appear natively, or open OpenCode and switch models with `/model`.
-3. Use `/agy-models` to refresh models from `agy acp`, `/agy-status` to inspect ACP status, or call `hello_greet` inside Code Mode:
+3. Use `/agy-connect` (or `/agy-connect refresh`, `/agy-connect logout`), `/agy-models`, `/agy-status`, or call `hello_greet` inside Code Mode:
 
 ```js
 await tools.hello.greet({ name: "XiaoYuan" })

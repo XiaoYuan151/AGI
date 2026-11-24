@@ -17,6 +17,13 @@ function createMockOpencodePluginModule() {
         },
       },
     },
+    Integration: {
+      ID: {
+        make(v) {
+          return v;
+        },
+      },
+    },
     Model: {
       ID: {
         make(v) {
@@ -55,15 +62,21 @@ const { default: agiPlugin } = await import(
   "../opencode/plugins/agi/src/index.ts"
 );
 
-function createMockContext(options = {}) {
+function createMockContext(options = {}, { activeConnection = null, resolvedCredential = null } = {}) {
   const providers = new Map();
   const providerTransforms = [];
+  const integrations = new Map();
+  const integrationMethods = new Map();
+  const connectionStatuses = [];
+  const eventSubscribers = [];
   const aisdkHooks = new Map();
   const sessionHooks = new Map();
   const tools = new Map();
   const commands = new Map();
   const synthetics = [];
   let reloadCalls = 0;
+  let currentActiveConnection = activeConnection;
+  let currentResolvedCredential = resolvedCredential;
 
   const applyProviderTransforms = () => {
     const editor = {
@@ -74,6 +87,12 @@ function createMockContext(options = {}) {
           provider: { ...info },
           models: new Map(models.map((m) => [m.id, m])),
         });
+        if (info.integrationID && !integrations.has(info.integrationID)) {
+          integrations.set(info.integrationID, {
+            id: info.integrationID,
+            name: info.name,
+          });
+        }
       },
       update: (id, fn) => {
         const rec = providers.get(id);
@@ -109,6 +128,87 @@ function createMockContext(options = {}) {
       reload: async () => {
         reloadCalls += 1;
         applyProviderTransforms();
+      },
+    },
+    integration: {
+      transform: async (cb) => {
+        cb({
+          list: () => Array.from(integrations.values()),
+          get: (id) => integrations.get(id),
+          update: (id, fn) => {
+            const item = integrations.get(id);
+            if (item) fn(item);
+          },
+          remove: (id) => integrations.delete(id),
+          method: {
+            list: (integrationID) => integrationMethods.get(integrationID) || [],
+            update: (input) => {
+              const list = integrationMethods.get(input.integrationID) || [];
+              list.push(input.method);
+              integrationMethods.set(input.integrationID, list);
+            },
+            remove: (integrationID, method) => {
+              const list = integrationMethods.get(integrationID) || [];
+              integrationMethods.set(
+                integrationID,
+                list.filter((m) => m !== method),
+              );
+            },
+          },
+        });
+        return { dispose: async () => {} };
+      },
+      reload: async () => {},
+      connection: {
+        active: async () => currentActiveConnection,
+        resolve: async () => currentResolvedCredential,
+        status: async (input) => {
+          connectionStatuses.push(input);
+        },
+      },
+    },
+    event: {
+      subscribe: ({ signal } = {}) => {
+        const queue = [];
+        let wake = null;
+        let closed = false;
+        const push = (evt) => {
+          if (closed) return;
+          if (wake) {
+            const fn = wake;
+            wake = null;
+            fn({ value: evt, done: false });
+          } else {
+            queue.push(evt);
+          }
+        };
+        const close = () => {
+          closed = true;
+          if (wake) {
+            const fn = wake;
+            wake = null;
+            fn({ value: undefined, done: true });
+          }
+        };
+        signal?.addEventListener("abort", close, { once: true });
+        eventSubscribers.push({ push, close });
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next() {
+                if (queue.length > 0) {
+                  return Promise.resolve({ value: queue.shift(), done: false });
+                }
+                if (closed) {
+                  return Promise.resolve({ value: undefined, done: true });
+                }
+                return new Promise((resolve) => {
+                  wake = resolve;
+                });
+              },
+            };
+          },
+        };
       },
     },
     aisdk: {
@@ -150,11 +250,21 @@ function createMockContext(options = {}) {
   return {
     ctx,
     providers,
+    integrations,
+    integrationMethods,
+    connectionStatuses,
     aisdkHooks,
     sessionHooks,
     tools,
     commands,
     synthetics,
+    setConnection(conn, cred) {
+      currentActiveConnection = conn;
+      currentResolvedCredential = cred;
+    },
+    emitEvent(evt) {
+      for (const sub of eventSubscribers) sub.push(evt);
+    },
     get reloadCalls() {
       return reloadCalls;
     },
@@ -274,6 +384,86 @@ describe("OpenCode agi + agy acp integration", () => {
       expect(harness.synthetics[1].text).toContain("Antigravity ACP status");
     } finally {
       await cleanup();
+    }
+  });
+
+  test("integrates official agy acp sign-in with OpenCode native /connect and refreshes on credential update", async () => {
+    const prevRequireAuth = process.env.MOCK_ACP_REQUIRE_AUTH;
+    const prevApiKey = process.env.GEMINI_API_KEY;
+    process.env.MOCK_ACP_REQUIRE_AUTH = "1";
+    delete process.env.GEMINI_API_KEY;
+
+    const harness = createMockContext({
+      agyBin: MOCK_AGY_BIN,
+      geminiDir: "/tmp/agi-test-oc-gemini",
+      appDataDir: "antigravity-acp",
+      discoveryTimeoutMs: 2500,
+    });
+
+    const cleanup = await agiPlugin.setup(harness.ctx);
+    try {
+      // 1. Provider links to integrationID & registers native /connect methods
+      const agyProv = harness.providers.get("agy");
+      expect(agyProv.provider.integrationID).toBe("agy");
+      const methods = harness.integrationMethods.get("agy");
+      expect(Array.isArray(methods)).toBe(true);
+
+      const cmdMethod = methods.find((m) => m.type === "command");
+      expect(cmdMethod).toBeDefined();
+      expect(cmdMethod.id).toBe("agy-acp-login");
+      expect(cmdMethod.command).toEqual([
+        MOCK_AGY_BIN,
+        "acp",
+        "--gemini-dir",
+        "/tmp/agi-test-oc-gemini",
+        "--app-data-dir",
+        "antigravity-acp",
+        "--login",
+      ]);
+
+      const keyMethod = methods.find((m) => m.type === "key");
+      expect(keyMethod).toBeDefined();
+      const envMethod = methods.find((m) => m.type === "env");
+      expect(envMethod).toBeDefined();
+      expect(envMethod.names).toEqual(["GEMINI_API_KEY"]);
+
+      // 2. Initially unauthenticated (fallback models only)
+      const connectTool = harness.tools.get("connect");
+      expect(connectTool).toBeDefined();
+      const initialStatus = JSON.parse((await connectTool.execute({ action: "status" })).content);
+      expect(initialStatus.authenticated).toBe(false);
+      expect(initialStatus.nativeCommand).toBe("/connect");
+
+      // 3. Simulate user completing /connect with a GEMINI_API_KEY credential
+      const fakeConn = { type: "credential", id: "cred_1", label: "Gemini Key", method: "key" };
+      harness.setConnection(fakeConn, { type: "key", key: "test-gemini-key-from-connect" });
+      harness.emitEvent({ type: "credential.updated" });
+
+      for (let i = 0; i < 30; i++) {
+        if (harness.providers.get("agy").models.has("gemini-custom-preview")) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(harness.providers.get("agy").models.has("gemini-custom-preview")).toBe(true);
+      expect(
+        harness.connectionStatuses.some(
+          (s) => s.integrationID === "agy" && s.status === undefined,
+        ),
+      ).toBe(true);
+
+      // 4. /agy-connect command reports native /connect guidance & supports logout
+      const connectCmd = harness.commands.get("agy-connect");
+      expect(connectCmd).toBeDefined();
+      await connectCmd.execute({ sessionID: "oc_sess_2" });
+      expect(harness.synthetics.some((s) => s.text.includes("`/connect`"))).toBe(true);
+
+      await connectCmd.execute({ sessionID: "oc_sess_2", arguments: "logout" });
+      expect(harness.synthetics.some((s) => s.text.includes("Signed out of Antigravity ACP"))).toBe(true);
+    } finally {
+      await cleanup();
+      if (prevRequireAuth === undefined) delete process.env.MOCK_ACP_REQUIRE_AUTH;
+      else process.env.MOCK_ACP_REQUIRE_AUTH = prevRequireAuth;
+      if (prevApiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevApiKey;
     }
   });
 });
