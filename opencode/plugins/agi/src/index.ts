@@ -80,6 +80,7 @@ export default Plugin.define({
     const providerIdStr = asString(ctx.options.providerId, "agy");
     const providerName = asString(ctx.options.providerName, "Antigravity (ACP)");
     const agyBin = asString(ctx.options.agyBin, process.env.AGY_BIN || "agy");
+    const geminiDir = asString(ctx.options.geminiDir, process.env.AGY_GEMINI_DIR || "");
     const appDataDir = asString(ctx.options.appDataDir, process.env.AGY_APP_DATA_DIR || "");
     const authMethod = asString(ctx.options.authMethod, process.env.AGY_AUTH_METHOD || "");
     const autoApprove = asBoolean(ctx.options.autoApprove, true);
@@ -91,6 +92,7 @@ export default Plugin.define({
     const providerID = Provider.ID.make(providerIdStr);
     const client = new AgyAcpClient({
       agyBin,
+      geminiDir: geminiDir || undefined,
       appDataDir: appDataDir || undefined,
       authMethod: authMethod || undefined,
       autoApprove,
@@ -343,6 +345,8 @@ export default Plugin.define({
             `Antigravity ACP status:`,
             `- provider: ${providerIdStr} (${providerName})`,
             `- agyBin: ${String(status.agyBin)}`,
+            `- geminiDir: ${String(status.geminiDir || "(default ~/.gemini)")}`,
+            `- appDataDir: ${String(status.appDataDir || "(default antigravity-cli)")}`,
             `- running: ${String(status.running)}`,
             `- authenticated: ${String(currentDiscovery.authenticated)}`,
             `- activeSessions: ${String(status.activeSessions)}`,

@@ -1,5 +1,38 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
+
+export function resolveAcpConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.AGY_ACP_CONFIG === "0") return "";
+  if (env.AGY_ACP_CONFIG && String(env.AGY_ACP_CONFIG).trim()) {
+    return path.resolve(String(env.AGY_ACP_CONFIG).trim());
+  }
+  const baseDir =
+    env.AGI_HOME && String(env.AGI_HOME).trim()
+      ? path.resolve(String(env.AGI_HOME).trim())
+      : path.join(os.homedir(), ".agi");
+  return path.join(baseDir, "acp.json");
+}
+
+export function readPersistedAcpConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const cfgPath = resolveAcpConfigPath(env);
+  if (!cfgPath) return {};
+  try {
+    if (!fs.existsSync(cfgPath)) return {};
+    const raw = fs.readFileSync(cfgPath, "utf8").trim();
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
 
 export interface AgyModelSpec {
   id: string;
@@ -67,6 +100,7 @@ export interface AgyTurnResult {
 
 export interface AgyClientOptions {
   agyBin?: string;
+  geminiDir?: string;
   appDataDir?: string;
   sandbox?: boolean;
   autoApprove?: boolean;
@@ -74,9 +108,12 @@ export interface AgyClientOptions {
   cwd?: string;
   extraArgs?: string[];
   env?: NodeJS.ProcessEnv;
+  usePersistedConfig?: boolean;
   fallbackModels?: AgyModelSpec[];
   rpcTimeoutMs?: number;
   discoveryTtlMs?: number;
+  authCooldownMs?: number;
+  policyCooldownMs?: number;
   maxSessions?: number;
 }
 
@@ -150,6 +187,17 @@ export class AgyAuthRequiredError extends Error {
     super(message);
     this.name = "AgyAuthRequiredError";
     this.authMethods = authMethods;
+  }
+}
+
+export class AgyPolicyCooldownError extends Error {
+  readonly code = 403;
+  readonly retryAfterMs: number;
+
+  constructor(message: string, retryAfterMs = 0) {
+    super(message);
+    this.name = "AgyPolicyCooldownError";
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -395,6 +443,17 @@ function isAuthError(err: unknown): boolean {
   return /authentication required|not authenticated|sign in|login required/i.test(msg);
 }
 
+function isPolicyOrQuotaError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  if (err instanceof AgyPolicyCooldownError) return true;
+  const code = Number((err as { code?: unknown }).code);
+  if (code === 403 || code === 429) return true;
+  const msg = String((err as { message?: unknown }).message || "");
+  return /permission_denied|403|terms of service|account.*(?:disabled|suspended|banned)|service has been disabled|resource_exhausted|too many requests|rate.?limit/i.test(
+    msg,
+  );
+}
+
 function extractTextFromContent(content: unknown): string {
   if (!content) return "";
   if (typeof content === "string") return content;
@@ -450,6 +509,7 @@ function selectPermissionOutcome(
 export class AgyAcpClient {
   readonly env: NodeJS.ProcessEnv;
   readonly agyBin: string;
+  readonly geminiDir: string;
   readonly appDataDir: string;
   readonly sandbox: boolean;
   readonly autoApprove: boolean;
@@ -457,6 +517,8 @@ export class AgyAcpClient {
   readonly defaultCwd: string;
   readonly rpcTimeoutMs: number;
   readonly discoveryTtlMs: number;
+  readonly authCooldownMs: number;
+  readonly policyCooldownMs: number;
   readonly maxSessions: number;
   readonly fallbackModels: AgyModelSpec[];
   readonly extraArgs: string[];
@@ -471,6 +533,9 @@ export class AgyAcpClient {
   private lastDiscovery: AgyDiscoveryResult | null = null;
   private lastDiscoveryAt = 0;
   private lastError: string | null = null;
+  private lastPolicyError: string | null = null;
+  private authCooldownUntil = 0;
+  private policyCooldownUntil = 0;
   private stderrTail: string[] = [];
   private sessions = new Map<string, SessionState>();
   private activeTurns = new Map<string, ActiveTurn>();
@@ -479,8 +544,19 @@ export class AgyAcpClient {
 
   constructor(options: AgyClientOptions = {}) {
     this.env = options.env || process.env;
+    const persisted =
+      options.usePersistedConfig === false ? {} : readPersistedAcpConfig(this.env);
     this.agyBin = options.agyBin || this.env.AGY_BIN || "agy";
-    this.appDataDir = options.appDataDir || this.env.AGY_APP_DATA_DIR || "";
+    this.geminiDir = String(
+      options.geminiDir ??
+        this.env.AGY_GEMINI_DIR ??
+        (typeof persisted.geminiDir === "string" ? persisted.geminiDir : ""),
+    ).trim();
+    this.appDataDir = String(
+      options.appDataDir ??
+        this.env.AGY_APP_DATA_DIR ??
+        (typeof persisted.appDataDir === "string" ? persisted.appDataDir : ""),
+    ).trim();
     this.sandbox =
       typeof options.sandbox === "boolean"
         ? options.sandbox
@@ -489,10 +565,16 @@ export class AgyAcpClient {
       typeof options.autoApprove === "boolean"
         ? options.autoApprove
         : this.env.AGY_AUTO_APPROVE !== "0";
-    this.authMethod = options.authMethod || this.env.AGY_AUTH_METHOD || "";
+    this.authMethod = String(
+      options.authMethod ??
+        this.env.AGY_AUTH_METHOD ??
+        (typeof persisted.authMethod === "string" ? persisted.authMethod : ""),
+    ).trim();
     this.defaultCwd = options.cwd || process.cwd();
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? 30000;
     this.discoveryTtlMs = options.discoveryTtlMs ?? 60000;
+    this.authCooldownMs = options.authCooldownMs ?? 30000;
+    this.policyCooldownMs = options.policyCooldownMs ?? 300000;
     this.maxSessions = options.maxSessions ?? 32;
     this.fallbackModels =
       Array.isArray(options.fallbackModels) && options.fallbackModels.length > 0
@@ -508,11 +590,26 @@ export class AgyAcpClient {
 
   private _buildArgs(): string[] {
     const args = ["acp"];
+    if (this.geminiDir) args.push("--gemini-dir", this.geminiDir);
     if (this.appDataDir) args.push("--app-data-dir", this.appDataDir);
     if (this.sandbox) args.push("--sandbox");
     if (this.autoApprove) args.push("--dangerously-skip-permissions");
     if (this.extraArgs.length > 0) args.push(...this.extraArgs);
     return args;
+  }
+
+  private _formatLoginCommand(): string {
+    const parts = [this.agyBin, "acp"];
+    if (this.geminiDir) parts.push("--gemini-dir", this.geminiDir);
+    if (this.appDataDir) parts.push("--app-data-dir", this.appDataDir);
+    parts.push("--login");
+    return parts.join(" ");
+  }
+
+  clearCooldown(): void {
+    this.authCooldownUntil = 0;
+    this.policyCooldownUntil = 0;
+    this.lastPolicyError = null;
   }
 
   private _ensureSpawned(): void {
@@ -757,6 +854,7 @@ export class AgyAcpClient {
     await this.initialize(timeoutMs);
     const result = await this._request("authenticate", { methodId }, timeoutMs);
     this.authenticated = true;
+    this.clearCooldown();
     return result;
   }
 
@@ -768,10 +866,40 @@ export class AgyAcpClient {
     return "";
   }
 
+  private _tripPolicyCooldown(err: unknown): AgyPolicyCooldownError {
+    const msg = err instanceof Error ? err.message : String(err || "Antigravity policy/quota error");
+    this.lastPolicyError = msg;
+    this.policyCooldownUntil = Date.now() + this.policyCooldownMs;
+    return new AgyPolicyCooldownError(
+      `Antigravity ACP paused for ${Math.ceil(this.policyCooldownMs / 1000)}s to prevent retry-loop abuse/bans: ${msg}`,
+      this.policyCooldownMs,
+    );
+  }
+
   private async _createSessionRaw(
     cwd: string,
     timeoutMs = this.rpcTimeoutMs,
+    { bypassAuthCooldown = false }: { bypassAuthCooldown?: boolean } = {},
   ): Promise<Record<string, unknown>> {
+    const now = Date.now();
+    if (now < this.policyCooldownUntil) {
+      const remaining = this.policyCooldownUntil - now;
+      throw new AgyPolicyCooldownError(
+        `Antigravity ACP is in safety cooldown (${Math.ceil(remaining / 1000)}s remaining) after: ${this.lastPolicyError || "policy/quota error"}`,
+        remaining,
+      );
+    }
+
+    if (!bypassAuthCooldown && now < this.authCooldownUntil && !this._resolveAutoAuthMethod()) {
+      const methods = Array.isArray(this.initResult?.authMethods)
+        ? (this.initResult.authMethods as Array<Record<string, unknown>>)
+        : [];
+      throw new AgyAuthRequiredError(
+        `Antigravity ACP requires authentication. Run '${this._formatLoginCommand()}' or set GEMINI_API_KEY.`,
+        methods,
+      );
+    }
+
     await this.initialize(timeoutMs);
     const tryNew = () =>
       this._request(
@@ -786,8 +914,12 @@ export class AgyAcpClient {
     try {
       const res = await tryNew();
       this.authenticated = true;
+      this.authCooldownUntil = 0;
       return res;
     } catch (err) {
+      if (isPolicyOrQuotaError(err)) {
+        throw this._tripPolicyCooldown(err);
+      }
       if (!isAuthError(err)) throw err;
       const methodId = this._resolveAutoAuthMethod();
       if (methodId) {
@@ -795,17 +927,22 @@ export class AgyAcpClient {
           await this.authenticate(methodId, timeoutMs);
           const retried = await tryNew();
           this.authenticated = true;
+          this.authCooldownUntil = 0;
           return retried;
         } catch (retryErr) {
+          if (isPolicyOrQuotaError(retryErr)) {
+            throw this._tripPolicyCooldown(retryErr);
+          }
           if (!isAuthError(retryErr)) throw retryErr;
         }
       }
       this.authenticated = false;
+      this.authCooldownUntil = Date.now() + this.authCooldownMs;
       const methods = Array.isArray(this.initResult?.authMethods)
         ? (this.initResult.authMethods as Array<Record<string, unknown>>)
         : [];
       throw new AgyAuthRequiredError(
-        "Antigravity ACP requires authentication. Run 'agy acp --login' or set GEMINI_API_KEY.",
+        `Antigravity ACP requires authentication. Run '${this._formatLoginCommand()}' or set GEMINI_API_KEY.`,
         methods,
       );
     }
@@ -835,7 +972,11 @@ export class AgyAcpClient {
     }
 
     try {
-      const sessionRes = await this._createSessionRaw(cwd || this.defaultCwd, timeoutMs);
+      const sessionRes = await this._createSessionRaw(
+        cwd || this.defaultCwd,
+        timeoutMs,
+        { bypassAuthCooldown: forceRefresh },
+      );
       const sessionId = String(sessionRes.sessionId || "");
       const extracted = extractModelsFromSessionResult(sessionRes);
       await this._closeSessionBestEffort(sessionId);
@@ -1155,6 +1296,11 @@ export class AgyAcpClient {
           stopReason: String(promptRes.stopReason || "end_turn"),
           usage: mergedUsage,
         };
+      } catch (err) {
+        if (isPolicyOrQuotaError(err)) {
+          throw this._tripPolicyCooldown(err);
+        }
+        throw err;
       } finally {
         signal?.removeEventListener("abort", onAbort);
         this.activeTurns.delete(sessionId);
@@ -1183,12 +1329,17 @@ export class AgyAcpClient {
       running: Boolean(this.proc && !this.proc.killed && this.proc.exitCode === null),
       pid: this.proc?.pid ?? null,
       agyBin: this.agyBin,
+      geminiDir: this.geminiDir || null,
+      appDataDir: this.appDataDir || null,
       agentInfo: this.initResult?.agentInfo ?? null,
       authMethods: this.initResult?.authMethods ?? [],
       authenticated: this.authenticated,
       activeSessions: this.sessions.size,
       modelsCount: this.lastDiscovery?.models?.length ?? this.fallbackModels.length,
       modelSource: this.lastDiscovery?.source ?? "fallback",
+      authCooldownUntil: this.authCooldownUntil || null,
+      policyCooldownUntil: this.policyCooldownUntil || null,
+      lastPolicyError: this.lastPolicyError,
       lastError: this.lastError,
       stderrTail: [...this.stderrTail],
     };

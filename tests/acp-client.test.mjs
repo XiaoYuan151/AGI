@@ -1,14 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AgyAcpClient,
   AgyAuthRequiredError,
+  AgyPolicyCooldownError,
   extractModelsFromSessionResult,
   normalizeModelId,
   parseFallbackModels,
+  readPersistedAcpConfig,
 } from "../claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -259,5 +262,115 @@ test("Live agy acp initialize smoke test", async (t) => {
     throw err;
   } finally {
     await client.dispose();
+  }
+});
+
+test("AgyAcpClient isolates --gemini-dir + --app-data-dir from persisted config and enforces cooldowns", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agi-acp-safety-"));
+  const cfgPath = path.join(tmpDir, "acp.json");
+  const geminiDir = path.join(tmpDir, "antigravity");
+  const callsLog = path.join(tmpDir, "calls.log");
+  fs.writeFileSync(
+    cfgPath,
+    JSON.stringify({ geminiDir, appDataDir: "antigravity-acp" }),
+    "utf8",
+  );
+
+  try {
+    const parsedCfg = readPersistedAcpConfig({ AGY_ACP_CONFIG: cfgPath });
+    assert.equal(parsedCfg.geminiDir, geminiDir);
+    assert.equal(parsedCfg.appDataDir, "antigravity-acp");
+
+    const isoClient = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      env: { ...process.env, AGY_ACP_CONFIG: cfgPath },
+    });
+    assert.deepEqual(isoClient._buildArgs(), [
+      "acp",
+      "--gemini-dir",
+      geminiDir,
+      "--app-data-dir",
+      "antigravity-acp",
+      "--dangerously-skip-permissions",
+    ]);
+    assert.equal(isoClient.status().geminiDir, geminiDir);
+    assert.equal(isoClient.status().appDataDir, "antigravity-acp");
+    await isoClient.dispose();
+
+    // Policy / 403 cooldown prevents repeated session/new retry storms
+    const policyClient = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      usePersistedConfig: false,
+      policyCooldownMs: 60000,
+      env: {
+        ...process.env,
+        MOCK_ACP_ERROR_403: "1",
+        MOCK_ACP_LOG_CALLS: callsLog,
+      },
+    });
+    try {
+      await assert.rejects(
+        () =>
+          policyClient.promptTurn({
+            conversationKey: "c1",
+            modelId: "gemini-2.5-pro",
+            promptBlocks: [{ type: "text", text: "hi" }],
+          }),
+        (err) => err instanceof AgyPolicyCooldownError,
+      );
+      await assert.rejects(
+        () =>
+          policyClient.promptTurn({
+            conversationKey: "c2",
+            modelId: "gemini-2.5-pro",
+            promptBlocks: [{ type: "text", text: "hi again" }],
+          }),
+        (err) => err instanceof AgyPolicyCooldownError,
+      );
+      const logged = fs.readFileSync(callsLog, "utf8").trim().split(/\r?\n/).filter(Boolean);
+      assert.equal(logged.length, 1);
+    } finally {
+      await policyClient.dispose();
+    }
+
+    // Auth cooldown prevents hammering session/new on repeated unauthenticated turns
+    fs.writeFileSync(callsLog, "", "utf8");
+    const authClient = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      usePersistedConfig: false,
+      authCooldownMs: 60000,
+      env: {
+        ...process.env,
+        MOCK_ACP_REQUIRE_AUTH: "1",
+        GEMINI_API_KEY: "",
+        MOCK_ACP_LOG_CALLS: callsLog,
+      },
+    });
+    try {
+      await assert.rejects(
+        () =>
+          authClient.promptTurn({
+            conversationKey: "a1",
+            modelId: "gemini-2.5-pro",
+            promptBlocks: [{ type: "text", text: "one" }],
+          }),
+        (err) => err instanceof AgyAuthRequiredError,
+      );
+      await assert.rejects(
+        () =>
+          authClient.promptTurn({
+            conversationKey: "a2",
+            modelId: "gemini-2.5-pro",
+            promptBlocks: [{ type: "text", text: "two" }],
+          }),
+        (err) => err instanceof AgyAuthRequiredError,
+      );
+      const logged = fs.readFileSync(callsLog, "utf8").trim().split(/\r?\n/).filter(Boolean);
+      assert.equal(logged.length, 1);
+    } finally {
+      await authClient.dispose();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

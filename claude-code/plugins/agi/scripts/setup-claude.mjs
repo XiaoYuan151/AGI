@@ -46,6 +46,8 @@ export function configureClaudeSettings({
   defaultModel = DEFAULT_FALLBACK_MODELS[0].id,
   setDefault = false,
   includeModelPicker = false,
+  geminiDir,
+  appDataDir,
   models = DEFAULT_FALLBACK_MODELS,
   remove = false,
   dryRun = false,
@@ -76,6 +78,8 @@ export function configureClaudeSettings({
         "ANTHROPIC_CUSTOM_MODEL_OPTION",
         "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
         "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
+        "AGY_GEMINI_DIR",
+        "AGY_APP_DATA_DIR",
       ]) {
         delete next.env[key];
       }
@@ -135,6 +139,12 @@ export function configureClaudeSettings({
   next.env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION = rawDesc.endsWith(`(${normalizedDefault})`)
     ? rawDesc
     : `${rawDesc} (${normalizedDefault})`;
+  if (typeof geminiDir === "string" && geminiDir.trim()) {
+    next.env.AGY_GEMINI_DIR = geminiDir.trim();
+  }
+  if (typeof appDataDir === "string" && appDataDir.trim()) {
+    next.env.AGY_APP_DATA_DIR = appDataDir.trim();
+  }
 
   const hasExistingCredential = Boolean(
     next.env.ANTHROPIC_API_KEY ||
@@ -216,6 +226,8 @@ function parseCliArgs(argv) {
     defaultModel: DEFAULT_FALLBACK_MODELS[0].id,
     setDefault: false,
     includeModelPicker: false,
+    geminiDir: process.env.AGY_GEMINI_DIR || undefined,
+    appDataDir: process.env.AGY_APP_DATA_DIR || undefined,
     remove: false,
     dryRun: false,
     startBridge: false,
@@ -229,6 +241,8 @@ function parseCliArgs(argv) {
     else if (t === "--host" && argv[i + 1]) opts.host = argv[++i];
     else if (t === "--auth-mode" && argv[i + 1]) opts.authMode = argv[++i];
     else if (t === "--default-model" && argv[i + 1]) opts.defaultModel = argv[++i];
+    else if (t === "--gemini-dir" && argv[i + 1]) opts.geminiDir = argv[++i];
+    else if (t === "--app-data-dir" && argv[i + 1]) opts.appDataDir = argv[++i];
     else if (t === "--set-default") opts.setDefault = true;
     else if (t === "--model-picker") opts.includeModelPicker = true;
     else if (t === "--remove") opts.remove = true;
@@ -253,6 +267,8 @@ async function main() {
         "  --auth-mode auto|preserve|local-token",
         "                              Credential handling for gateway discovery",
         "  --default-model <id>        AGY model for ANTHROPIC_CUSTOM_MODEL_OPTION",
+        "  --gemini-dir <dir>          Isolated --gemini-dir passed to agy acp",
+        "  --app-data-dir <name>       --app-data-dir passed to agy acp (e.g. antigravity-acp)",
         "  --set-default               Also set settings.model to anthropic-agy/<id>",
         "  --model-picker              Add AGY entries to user settings modelPicker (Claude >= 2.1.242)",
         "  --start-bridge              Ensure the background bridge is running",

@@ -1,11 +1,24 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import readline from "node:readline";
 
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  console.log("1.5.15-mock");
+  process.exit(0);
+}
+
 const requireAuth = process.env.MOCK_ACP_REQUIRE_AUTH === "1";
+const error403 = process.env.MOCK_ACP_ERROR_403 === "1";
 const legacyModels = process.env.MOCK_ACP_LEGACY_MODELS === "1";
 const requestPermission = process.env.MOCK_ACP_REQUEST_PERMISSION === "1";
 const emitToolCalls = process.env.MOCK_ACP_EMIT_TOOL_CALLS === "1";
 const ignoreCancel = process.env.MOCK_ACP_IGNORE_CANCEL === "1";
+const logCallsPath = process.env.MOCK_ACP_LOG_CALLS || "";
+
+function logMethodCall(method) {
+  if (!logCallsPath) return;
+  fs.appendFileSync(logCallsPath, `${method}\n`, "utf8");
+}
 
 let authenticated = !requireAuth;
 let nextSessionNum = 1;
@@ -193,6 +206,15 @@ rl.on("line", async (line) => {
     }
 
     if (method === "session/new") {
+      logMethodCall(method);
+      if (error403) {
+        write({
+          jsonrpc: "2.0",
+          id,
+          error: { code: 403, message: "PERMISSION_DENIED: Terms of Service violation" },
+        });
+        return;
+      }
       if (!authenticated) {
         write({
           jsonrpc: "2.0",
