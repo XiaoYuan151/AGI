@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# AGI plugin installer for Claude Code, Codex, and OpenCode V2.
+# AGI plugin installer for Claude Code, Codex, OpenCode V2, and DeepSeek Harness.
 # Uses T3 Code's Antigravity safety model:
 #   1. Official unmodified `agy acp` subprocess over stdio JSON-RPC 2.0 only
 #      (no OAuth token extraction, no Cloud Code HTTP proxying, no UA spoofing).
@@ -9,9 +9,16 @@ set -euo pipefail
 #      so ACP sessions never collide with interactive `agy` CLI or Antigravity IDE.
 #   3. Built-in auth/policy cooldowns to prevent ban-triggering retry loops.
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [[ -n "$SCRIPT_SOURCE" && -f "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+fi
 
 AGI_HOME="${AGI_HOME:-$HOME/.agi}"
+AGI_INSTALL_DIR="${AGI_INSTALL_DIR:-$AGI_HOME/repo}"
+AGI_REPO_URL="${AGI_REPO_URL:-https://github.com/XiaoYuan151/AGI.git}"
+AGI_REPO_REF="${AGI_REPO_REF:-main}"
 AGY_BIN="${AGY_BIN:-agy}"
 AGY_GEMINI_DIR="${AGY_GEMINI_DIR:-$AGI_HOME/antigravity}"
 AGY_APP_DATA_DIR="${AGY_APP_DATA_DIR:-antigravity-acp}"
@@ -20,11 +27,16 @@ USE_DEFAULT_GEMINI_DIR=0
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+DSH_PROFILE=""
 
 INSTALL_CLAUDE=0
 INSTALL_CODEX=0
 INSTALL_OPENCODE=0
+INSTALL_DSH=0
 FORCE_ALL=0
+EXPLICIT_TARGETS=0
+ASSUME_YES=0
 
 CLAUDE_AUTH_MODE="auto"
 CODEX_MODE="profile"
@@ -39,12 +51,22 @@ DRY_RUN=0
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [options]
+   or: curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash -s -- [options]
 
-Targets (default: auto-detect installed Claude Code, Codex, and OpenCode):
-  --all                         Configure all three harnesses
+Targets (interactive multi-select picker in TTY, or auto-detect with -y / non-TTY):
+  -a, --agent <name>            Select target agent(s) (repeatable or comma-separated:
+                                claude | codex | opencode | dsh | all)
+  --all                         Configure all four harnesses
   --claude                      Configure Claude Code plugin + bridge
   --codex                       Configure Codex plugin + bridge
-  --opencode                    Configure OpenCode V2 plugin
+  --opencode                    Configure OpenCode V2 plugin (native /connect + /model)
+  --dsh, --deepseek-harness     Configure DeepSeek Harness plugin (Cordis LlmAdapter + /agy-connect)
+  -y, --yes, --no-interactive   Skip interactive agent picker and use detected agents
+
+Remote bootstrap (used when piped via curl | bash outside a local checkout):
+  --install-dir <dir>           Directory to clone/update the repo (default: ~/.agi/repo)
+  --repo-url <url>              Git repository URL (default: https://github.com/XiaoYuan151/AGI.git)
+  --ref <branch|tag>            Git branch or tag to install (default: main)
 
 Antigravity ACP isolation (T3 Code safe mode):
   --gemini-dir <dir>            Isolated --gemini-dir for agy acp (default: ~/.agi/antigravity)
@@ -57,6 +79,7 @@ Harness options:
   --claude-auth-mode <mode>     auto (default) | preserve | local-token
   --local-token                 Shorthand for --claude-auth-mode local-token
   --codex-mode <mode>           profile (default: `codex -p agy`) | default (merge ~/.codex/config.toml)
+  --dsh-profile <name>          Target DeepSeek Harness profile (default: all existing profiles or desktop)
   --no-start-bridge             Configure without starting background bridge daemons
   --copy                        Copy OpenCode plugin instead of symlinking
 
@@ -89,12 +112,92 @@ run_cmd() {
   "$@"
 }
 
+select_agent_token() {
+  local raw="$1"
+  local item
+  IFS=',' read -r -a items <<< "$raw"
+  for item in "${items[@]}"; do
+    local lower
+    lower="$(printf '%s' "$item" | tr '[:upper:]' '[:lower:]' | xargs)"
+    case "$lower" in
+      claude|claude-code|claudecode)
+        INSTALL_CLAUDE=1
+        EXPLICIT_TARGETS=1
+        ;;
+      codex|openai-codex)
+        INSTALL_CODEX=1
+        EXPLICIT_TARGETS=1
+        ;;
+      opencode|opencode-v2)
+        INSTALL_OPENCODE=1
+        EXPLICIT_TARGETS=1
+        ;;
+      dsh|deepseek|deepseek-harness)
+        INSTALL_DSH=1
+        EXPLICIT_TARGETS=1
+        ;;
+      all)
+        FORCE_ALL=1
+        EXPLICIT_TARGETS=1
+        ;;
+      "") ;;
+      *)
+        die "Unknown agent '$item' (expected: claude, codex, opencode, dsh, all)"
+        ;;
+    esac
+  done
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --all) FORCE_ALL=1 ;;
-    --claude) INSTALL_CLAUDE=1 ;;
-    --codex) INSTALL_CODEX=1 ;;
-    --opencode) INSTALL_OPENCODE=1 ;;
+    --all)
+      FORCE_ALL=1
+      EXPLICIT_TARGETS=1
+      ;;
+    -a|--agent)
+      [[ $# -ge 2 ]] || die "$1 requires an agent name (claude|codex|opencode|dsh|all)"
+      select_agent_token "$2"
+      shift
+      ;;
+    --claude)
+      INSTALL_CLAUDE=1
+      EXPLICIT_TARGETS=1
+      ;;
+    --codex)
+      INSTALL_CODEX=1
+      EXPLICIT_TARGETS=1
+      ;;
+    --opencode)
+      INSTALL_OPENCODE=1
+      EXPLICIT_TARGETS=1
+      ;;
+    --dsh|--deepseek-harness)
+      INSTALL_DSH=1
+      EXPLICIT_TARGETS=1
+      ;;
+    --dsh-profile)
+      [[ $# -ge 2 ]] || die "--dsh-profile requires a profile name"
+      DSH_PROFILE="$2"
+      shift
+      ;;
+    -y|--yes|--no-interactive)
+      ASSUME_YES=1
+      ;;
+    --install-dir)
+      [[ $# -ge 2 ]] || die "--install-dir requires a path"
+      AGI_INSTALL_DIR="$2"
+      shift
+      ;;
+    --repo-url)
+      [[ $# -ge 2 ]] || die "--repo-url requires a URL"
+      AGI_REPO_URL="$2"
+      shift
+      ;;
+    --ref)
+      [[ $# -ge 2 ]] || die "--ref requires a branch or tag"
+      AGI_REPO_REF="$2"
+      shift
+      ;;
     --gemini-dir)
       [[ $# -ge 2 ]] || die "--gemini-dir requires a path"
       AGY_GEMINI_DIR="$2"
@@ -139,32 +242,141 @@ if [[ "$USE_DEFAULT_GEMINI_DIR" -eq 1 ]]; then
   AGY_GEMINI_DIR=""
 fi
 
-if [[ "$FORCE_ALL" -eq 1 ]]; then
-  INSTALL_CLAUDE=1
-  INSTALL_CODEX=1
-  INSTALL_OPENCODE=1
-elif [[ "$INSTALL_CLAUDE" -eq 0 && "$INSTALL_CODEX" -eq 0 && "$INSTALL_OPENCODE" -eq 0 ]]; then
-  if command -v claude >/dev/null 2>&1 || [[ -d "$CLAUDE_CONFIG_DIR" ]]; then
-    INSTALL_CLAUDE=1
-  fi
-  if command -v codex >/dev/null 2>&1 || [[ -d "$CODEX_HOME" ]]; then
-    INSTALL_CODEX=1
-  fi
-  if command -v opencode >/dev/null 2>&1 || [[ -d "$OPENCODE_CONFIG_DIR" ]]; then
-    INSTALL_OPENCODE=1
-  fi
-  if [[ "$INSTALL_CLAUDE" -eq 0 && "$INSTALL_CODEX" -eq 0 && "$INSTALL_OPENCODE" -eq 0 ]]; then
-    INSTALL_CLAUDE=1
-    INSTALL_CODEX=1
-    INSTALL_OPENCODE=1
-  fi
-fi
-
 command -v node >/dev/null 2>&1 || die "Node.js (18+) is required."
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 if [[ "$NODE_MAJOR" -lt 18 ]]; then
   die "Node.js 18+ is required (found $(node -v))."
 fi
+
+is_agi_repo() {
+  local dir="$1"
+  [[ -n "$dir" \
+    && -f "$dir/claude-code/plugins/agi/.claude-plugin/plugin.json" \
+    && -f "$dir/codex/plugins/agi/plugin.json" \
+    && -f "$dir/opencode/plugins/agi/package.json" \
+    && -f "$dir/deepseek-harness/plugins/agi/package.json" ]]
+}
+
+resolve_repo_root() {
+  if is_agi_repo "$SCRIPT_DIR"; then
+    REPO_ROOT="$SCRIPT_DIR"
+    return 0
+  fi
+  if is_agi_repo "$PWD"; then
+    REPO_ROOT="$PWD"
+    return 0
+  fi
+
+  REPO_ROOT="$AGI_INSTALL_DIR"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    if is_agi_repo "$REPO_ROOT"; then
+      log "[dry-run] Would use/update existing checkout at $REPO_ROOT"
+      return 0
+    fi
+    log "[dry-run] Would download $AGI_REPO_URL ($AGI_REPO_REF) into $REPO_ROOT"
+    exit 0
+  fi
+
+  mkdir -p "$(dirname "$REPO_ROOT")"
+  if [[ -d "$REPO_ROOT/.git" ]] && command -v git >/dev/null 2>&1; then
+    log "Updating AGI checkout at $REPO_ROOT ($AGI_REPO_REF)..."
+    if ! git -C "$REPO_ROOT" fetch --depth 1 origin "$AGI_REPO_REF" </dev/null >/dev/null 2>&1 || \
+       ! git -C "$REPO_ROOT" checkout -B "$AGI_REPO_REF" FETCH_HEAD </dev/null >/dev/null 2>&1; then
+      warn "Could not update $REPO_ROOT from remote; continuing with existing files."
+    fi
+  elif ! is_agi_repo "$REPO_ROOT"; then
+    if command -v git >/dev/null 2>&1; then
+      log "Cloning $AGI_REPO_URL ($AGI_REPO_REF) into $REPO_ROOT..."
+      rm -rf "$REPO_ROOT"
+      git clone --depth 1 --branch "$AGI_REPO_REF" "$AGI_REPO_URL" "$REPO_ROOT" </dev/null >/dev/null
+    elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
+      local clean_repo="${AGI_REPO_URL%.git}"
+      local tarball_url=""
+      if [[ "$clean_repo" =~ ^https://github\.com/([^/]+/[^/]+)$ ]]; then
+        tarball_url="https://codeload.github.com/${BASH_REMATCH[1]}/tar.gz/${AGI_REPO_REF}"
+      else
+        die "git is required to clone non-GitHub URL: $AGI_REPO_URL"
+      fi
+      log "Downloading $tarball_url into $REPO_ROOT..."
+      local tmp_archive
+      tmp_archive="$(mktemp -d)"
+      curl -fsSL "$tarball_url" | tar -xz -C "$tmp_archive" --strip-components=1
+      rm -rf "$REPO_ROOT"
+      mv "$tmp_archive" "$REPO_ROOT"
+    else
+      die "git (or curl + tar) is required when running install.sh outside a cloned repo."
+    fi
+  fi
+
+  is_agi_repo "$REPO_ROOT" || die "Downloaded repository at $REPO_ROOT is missing expected plugin files."
+}
+
+resolve_repo_root
+
+detect_agents_csv() {
+  local detected=()
+  if command -v claude >/dev/null 2>&1 || [[ -d "$CLAUDE_CONFIG_DIR" ]]; then
+    detected+=("claude")
+  fi
+  if command -v codex >/dev/null 2>&1 || [[ -d "$CODEX_HOME" ]]; then
+    detected+=("codex")
+  fi
+  if command -v opencode >/dev/null 2>&1 || [[ -d "$OPENCODE_CONFIG_DIR" ]]; then
+    detected+=("opencode")
+  fi
+  if command -v dsh >/dev/null 2>&1 || [[ -d "$DSH_HOME" ]] || [[ -d "/Applications/DeepSeek Harness.app" ]]; then
+    detected+=("dsh")
+  fi
+  local IFS=","
+  printf '%s' "${detected[*]}"
+}
+
+resolve_target_agents() {
+  if [[ "$FORCE_ALL" -eq 1 ]]; then
+    INSTALL_CLAUDE=1
+    INSTALL_CODEX=1
+    INSTALL_OPENCODE=1
+    INSTALL_DSH=1
+    return 0
+  fi
+
+  if [[ "$EXPLICIT_TARGETS" -eq 1 ]]; then
+    return 0
+  fi
+
+  local detected_csv
+  detected_csv="$(detect_agents_csv)"
+
+  if [[ "$ASSUME_YES" -eq 0 && "$DRY_RUN" -eq 0 && -f "$REPO_ROOT/scripts/select-agents.mjs" ]]; then
+    if [[ -t 1 && -r /dev/tty && -w /dev/tty ]]; then
+      local action_name="install"
+      if [[ "$UNINSTALL" -eq 1 ]]; then
+        action_name="uninstall"
+      fi
+      local selected_csv=""
+      local picker_rc=0
+      selected_csv="$(node "$REPO_ROOT/scripts/select-agents.mjs" --action "$action_name" --detected "$detected_csv")" || picker_rc=$?
+      if [[ "$picker_rc" -eq 130 ]]; then
+        log "Cancelled by user."
+        exit 130
+      elif [[ "$picker_rc" -eq 0 && -n "$selected_csv" ]]; then
+        select_agent_token "$selected_csv"
+        return 0
+      fi
+    fi
+  fi
+
+  if [[ -n "$detected_csv" ]]; then
+    select_agent_token "$detected_csv"
+  else
+    INSTALL_CLAUDE=1
+    INSTALL_CODEX=1
+    INSTALL_OPENCODE=1
+    INSTALL_DSH=1
+  fi
+}
+
+resolve_target_agents
 
 export AGI_HOME
 export AGY_BIN
@@ -173,6 +385,7 @@ export AGY_APP_DATA_DIR
 export AGY_ACP_CONFIG="$AGI_HOME/acp.json"
 export CLAUDE_CONFIG_DIR
 export CODEX_HOME
+export DSH_HOME
 
 stop_bridges() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -231,6 +444,22 @@ uninstall_all() {
         warn "Leaving unrecognized directory at $oc_target intact."
       fi
     fi
+  fi
+
+  if [[ "$INSTALL_DSH" -eq 1 ]]; then
+    log "Removing DeepSeek Harness configuration..."
+    local dsh_rm_args=(
+      "$REPO_ROOT/deepseek-harness/plugins/agi/scripts/setup-dsh.mjs"
+      "--dsh-home" "$DSH_HOME"
+      "--remove"
+    )
+    if [[ -n "$DSH_PROFILE" ]]; then
+      dsh_rm_args+=("--profile" "$DSH_PROFILE")
+    fi
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      dsh_rm_args+=("--dry-run")
+    fi
+    node "${dsh_rm_args[@]}" >/dev/null
   fi
 
   if [[ -f "$AGI_HOME/acp.json" ]]; then
@@ -346,6 +575,12 @@ if [[ "$DRY_RUN" -eq 0 ]] && command -v "$AGY_BIN" >/dev/null 2>&1; then
     if [[ -t 0 ]]; then
       log "Running official interactive ACP sign-in: ${LOGIN_CMD[*]}"
       "${LOGIN_CMD[@]}" || warn "Interactive login did not complete; fallback models will still be registered."
+      AUTH_JSON="$(cd "$REPO_ROOT" && probe_acp_auth)"
+      IS_AUTH="$(node -e 'const d = JSON.parse(process.argv[1]); console.log(d.authenticated === true ? "1" : "0");' "$AUTH_JSON")"
+      MODELS_CNT="$(node -e 'const d = JSON.parse(process.argv[1]); console.log(d.modelsCount || 0);' "$AUTH_JSON")"
+    elif [[ -t 1 && -r /dev/tty && -w /dev/tty ]]; then
+      log "Running official interactive ACP sign-in via /dev/tty: ${LOGIN_CMD[*]}"
+      "${LOGIN_CMD[@]}" </dev/tty || warn "Interactive login did not complete; fallback models will still be registered."
       AUTH_JSON="$(cd "$REPO_ROOT" && probe_acp_auth)"
       IS_AUTH="$(node -e 'const d = JSON.parse(process.argv[1]); console.log(d.authenticated === true ? "1" : "0");' "$AUTH_JSON")"
       MODELS_CNT="$(node -e 'const d = JSON.parse(process.argv[1]); console.log(d.modelsCount || 0);' "$AUTH_JSON")"
@@ -475,7 +710,26 @@ if [[ "$INSTALL_OPENCODE" -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Summary
+# 5. DeepSeek Harness (dsh)
+# ---------------------------------------------------------------------------
+if [[ "$INSTALL_DSH" -eq 1 ]]; then
+  log "Setting up DeepSeek Harness plugin (@local/dsh-agi)..."
+  DSH_SETUP_ARGS=(
+    "$REPO_ROOT/deepseek-harness/plugins/agi/scripts/setup-dsh.mjs"
+    "--dsh-home" "$DSH_HOME"
+  )
+  if [[ -n "$DSH_PROFILE" ]]; then
+    DSH_SETUP_ARGS+=("--profile" "$DSH_PROFILE")
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    DSH_SETUP_ARGS+=("--dry-run")
+  fi
+  node "${DSH_SETUP_ARGS[@]}" >/dev/null
+  log "DeepSeek Harness configured in $DSH_HOME/profiles (${DSH_PROFILE:-auto-detected profiles})."
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Summary
 # ---------------------------------------------------------------------------
 cat <<EOF
 
@@ -488,19 +742,22 @@ Next steps:
 EOF
 
 if [[ "$INSTALL_CLAUDE" -eq 1 ]]; then
-  printf '  - Claude Code : Run `claude` and select `anthropic-agy/...` in `/model`\n'
+  printf '  - Claude Code      : Run `claude`, sign in with `/agi:connect`, and pick `anthropic-agy/...` in `/model`\n'
   if [[ "$CLAUDE_AUTH_MODE" == "auto" ]]; then
-    printf '                  (No Anthropic account? Re-run with `./install.sh --claude --local-token`)\n'
+    printf '                       (No Anthropic account? Re-run with `./install.sh --claude --local-token`)\n'
   fi
 fi
 if [[ "$INSTALL_CODEX" -eq 1 ]]; then
   if [[ "$CODEX_MODE" == "profile" ]]; then
-    printf '  - Codex       : Run `codex -p agy` and switch models via `/model`\n'
+    printf '  - Codex            : Run `codex -p agy`, sign in with `$agy-connect`, and switch models via `/model`\n'
   else
-    printf '  - Codex       : Run `codex` and switch models via `/model`\n'
+    printf '  - Codex            : Run `codex`, sign in with `$agy-connect`, and switch models via `/model`\n'
   fi
 fi
 if [[ "$INSTALL_OPENCODE" -eq 1 ]]; then
-  printf '  - OpenCode V2 : Run `opencode models` or `/model` inside `opencode`\n'
+  printf '  - OpenCode V2      : Run `opencode`, sign in natively with `/connect` -> Antigravity (ACP), and pick `agy/*` in `/model`\n'
 fi
-printf '  - Authenticate: `%s`\n' "${LOGIN_CMD[*]}"
+if [[ "$INSTALL_DSH" -eq 1 ]]; then
+  printf '  - DeepSeek Harness : Restart DeepSeek Harness, use `/agy-connect` or `/agy-models`, and select `Antigravity (ACP)`\n'
+fi
+printf '  - Authenticate CLI : `%s` (or export `GEMINI_API_KEY` for ToS-recommended API-key auth)\n' "${LOGIN_CMD[*]}"
