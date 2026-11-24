@@ -1,6 +1,8 @@
-# AGI — Antigravity ACP Plugins for Claude Code, Codex, OpenCode, and DeepSeek Harness
+# Anti-Gravity Integration (AGI)
 
-Use Google Antigravity models directly inside **Claude Code**, **Codex**, **OpenCode V2**, and **DeepSeek Harness (`dsh`)** as if they were built-in—using Google's official `agy acp` stdio protocol.
+**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
+
+**Anti-Gravity Integration (AGI)** is a plugin for **Claude Code**, **Codex**, **OpenCode**, **DeepSeek Harness**, **Neuro SDK**, and other harnesses that brings the advanced Gemini models into them—using Google's official `agy acp` stdio protocol.
 
 Each folder in this repository is a standalone `agi` plugin tailored to its agent harness. Once installed, you can sign in using each harness's native connect command, open **`/model`**, pick an Antigravity model (or switch back to your native models mid-conversation), and keep working without leaving your terminal. Every plugin is self-contained—zero build steps and zero third-party npm runtime dependencies.
 
@@ -268,3 +270,9 @@ The test suite uses a local mock `agy acp` server (`tests/fixtures/mock-agy-acp.
 node --test tests/acp-client.test.mjs tests/claude-bridge.test.mjs tests/codex-bridge.test.mjs tests/dsh-plugin.test.mjs tests/install.test.mjs
 bun test tests/opencode-plugin.test.mjs
 ```
+
+---
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=XiaoYuan151/AGI&type=Date)](https://www.star-history.com/#XiaoYuan151/AGI&Date)
