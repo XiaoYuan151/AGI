@@ -1,0 +1,44 @@
+{
+  "name": "@local/dsh-agi",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness plugin integrating Google Antigravity ACP (agy acp) as a native LLM provider with /agy-connect, /agy-models, and /agy-status commands.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "agy",
+    "acp",
+    "antigravity",
+    "llm"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./adapter": "./src/adapter.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.0",
+    "@deepseek-ai/dsh-commands": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-commands": {
+      "optional": true
+    }
+  }
+}

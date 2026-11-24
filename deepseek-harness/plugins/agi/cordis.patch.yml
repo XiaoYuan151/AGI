@@ -1,0 +1,4 @@
+# dsh bundle patch: inserts the Antigravity ACP provider and commands into a profile.
+- insert:
+    - id: agi-acp
+      name: '@local/dsh-agi'
