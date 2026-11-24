@@ -2,60 +2,139 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **Español**
 
-**Anti-Gravity Integration (AGI)** es un plugin para **Claude Code**, **Codex**, **OpenCode**, **DeepSeek Harness**, **Neuro SDK** y otros harnesses que integra los modelos avanzados de Gemini mediante el protocolo oficial stdio `agy acp` de Google.
+Anti-Gravity Integration (AGI) es un plugin para Claude Code, Codex, OpenCode, DeepSeek Harness, Neuro SDK y otros harnesses que lleva los modelos avanzados de Gemini a todos ellos.
 
-Cada carpeta de este repositorio es un plugin `agi` independiente adaptado a su harness. Una vez instalado, puedes iniciar sesión con el comando nativo de conexión de cada herramienta, abrir **`/model`**, elegir un modelo Antigravity (o volver a tus modelos nativos a mitad de conversación) y seguir trabajando sin salir de tu terminal. Cada plugin es autocontenido: cero pasos de compilación y cero dependencias npm de terceros en tiempo de ejecución.
+Instala el plugin una vez, inicia sesión con el comando nativo de tu herramienta y elige un modelo Antigravity desde `/model`. Puedes alternar entre modelos de Antigravity y tus modelos habituales en medio de una conversación.
 
-| Plugin | Harness | Cómo se conecta a `agy acp` | Inicio de sesión nativo | IDs en `/model` |
-| --- | --- | --- | --- | --- |
-| [`claude-code/plugins/agi/`](claude-code/plugins/agi) | Claude Code | Puente local compatible con Anthropic (`127.0.0.1:43110`) + herramientas MCP + hook `SessionStart` | `/agi:connect` (`agy-claude-connect`) | `anthropic-agy/<model>` |
-| [`codex/plugins/agi/`](codex/plugins/agi) | Codex | Puente local OpenAI Responses API (`127.0.0.1:43111`) + herramientas MCP + catálogo de modelos | `$agy-connect` (`agy-codex-connect.mjs`) | `agy/<model>` |
-| [`opencode/plugins/agi/`](opencode/plugins/agi) | OpenCode V2 | Proveedor nativo en proceso `LanguageModelV3` + Integration API (sin demonio HTTP) | Nativo `/connect` → **Antigravity (ACP)** (`/agy-connect`) | `agy/<model>` |
-| [`deepseek-harness/plugins/agi/`](deepseek-harness/plugins/agi) | DeepSeek Harness (`dsh`) | Paquete nativo en proceso Cordis `LlmAdapter` (sin demonio HTTP) | `/agy-connect` (`agy-dsh-connect.mjs`) | `agy/<model>` |
+| Harness | Comando de conexión | IDs en `/model` | Carpeta del plugin |
+| --- | --- | --- | --- |
+| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](claude-code/plugins/agi) |
+| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](codex/plugins/agi) |
+| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](opencode/plugins/agi) |
+| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](deepseek-harness/plugins/agi) |
 
 ---
 
-## Instalación rápida (`curl | bash` o `./install.sh`)
+## Instalación
 
-Ejecuta el instalador para abrir un **selector interactivo estilo `npx skills`** (`↑/↓` mover, `Espacio` alternar, `a` seleccionar todos, `Enter` confirmar) y elegir en qué agentes instalar o desinstalar:
+Requisitos: **Node.js 18+** y el CLI oficial **Antigravity (`agy`)** en tu `PATH`.
+
+### Instalación rápida
+
+Ejecuta el instalador para abrir un selector interactivo (flechas o `j`/`k` para moverte, `Espacio` para marcar, `a` para seleccionar todo, `Enter` para confirmar) y elegir qué herramientas configurar:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash
 ```
 
-O selecciona agentes directamente mediante flags:
+O clona el repositorio y ejecútalo en local:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash -s -- -a opencode,dsh
-curl -fsSL https://raw.githubusercontent.com/XiaoYuan151/AGI/main/install.sh | bash -s -- --all --yes
-./install.sh --uninstall --all --purge
+git clone https://github.com/XiaoYuan151/AGI.git
+cd AGI
+./install.sh
+```
+
+Opciones útiles (con `curl`, pásalas después de `bash -s --`):
+
+```bash
+./install.sh -a opencode,dsh              # instalar solo ciertos harnesses (claude | codex | opencode | dsh | all)
+./install.sh --all --yes                  # instalar todos sin preguntar
+./install.sh --claude --local-token       # Claude Code sin cuenta de Anthropic
+./install.sh --codex --codex-mode default # añadir agy a tu config por defecto en lugar de usar `-p agy`
+./install.sh --dsh --dsh-profile desktop  # apuntar a un perfil concreto de DeepSeek Harness
+./install.sh --dry-run                    # ver qué cambiaría sin tocar archivos
+./install.sh --uninstall                  # elegir qué desinstalar (añade --purge para borrar ~/.agi)
 ```
 
 ---
 
-## Cumplimiento oficial de Google y Términos de Servicio (modelo T3 Code)
+## Autenticación
 
-- **Solo subproceso oficial sin modificar `agy acp`:** Toda la comunicación utiliza el servidor oficial `agy acp` stdio JSON-RPC 2.0, `agy acp [--gemini-dir ...] [--app-data-dir ...] --login` y los RPC oficiales `authenticate` / `logout`. Nunca extrae tokens OAuth ni modifica cabeceras User-Agent.
-- **Autenticación recomendada para harnesses externos/automatizados:** Usa **`GEMINI_API_KEY` (`gemini-api-key`)** o **Gemini Enterprise (`oauth-business` / `agent-platform`)**.
-- **Perfil ACP aislado (`--gemini-dir ~/.agi/antigravity --app-data-dir antigravity-acp`):** Evita colisiones con tu `agy` CLI o Antigravity IDE, con protección contra bucles de reintentos (`403` / `429` / `-32000`).
+AGI usa únicamente el CLI oficial `agy acp` y guarda su sesión por separado en `~/.agi/`.
 
----
+Puedes iniciar sesión con cualquiera de las dos opciones:
 
-## Comandos de conexión por harness
+- **Clave de API de Gemini (recomendado):** define `GEMINI_API_KEY` o introdúcela cuando el flujo de conexión te lo pida. Las cuentas Enterprise (`oauth-business` / `agent-platform`) también funcionan mediante `--method`.
+- **Inicio de sesión interactivo con Google:** usa el comando de conexión de tu herramienta o ejecuta `agy acp --gemini-dir ~/.agi/antigravity --app-data-dir antigravity-acp --login`.
 
-- **Claude Code:** `/agi:connect` (o `./claude-code/plugins/agi/bin/agy-claude-connect`)
-- **Codex:** `$agy-connect` (o `node ./codex/plugins/agi/scripts/agy-codex-connect.mjs`)
-- **OpenCode V2:** `/connect` nativo → **Antigravity (ACP)** (y `/agy-connect`)
-- **DeepSeek Harness (`dsh`):** `/agy-connect`, `/agy-models` y `/agy-status` (configuración con `node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs`)
+Si aún no has iniciado sesión, `/model` mostrará una lista base de Gemini. Al autenticarte y actualizar, aparecerá el catálogo completo de tu cuenta.
 
 ---
 
-## Ejecutar las pruebas
+## Uso por herramienta
+
+### Claude Code
+
+Si usaste `./install.sh`, el plugin y el puente local ya quedan configurados. Para hacerlo manualmente:
 
 ```bash
-node --test tests/acp-client.test.mjs tests/claude-bridge.test.mjs tests/codex-bridge.test.mjs tests/dsh-plugin.test.mjs tests/install.test.mjs
-bun test tests/opencode-plugin.test.mjs
+claude --plugin-dir ./claude-code/plugins/agi
+./claude-code/plugins/agi/bin/agy-claude-setup --scope user --start-bridge
 ```
+
+Reinicia `claude`, ejecuta `/agi:connect` para iniciar sesión o revisar el estado y abre `/model` para elegir `anthropic-agy/...`. Tus claves de Anthropic y modelos `claude-*` siguen funcionando con normalidad.
+
+Para actualizar la lista de modelos usa `/agi:agy-models`, y para revertir los cambios ejecuta `./claude-code/plugins/agi/bin/agy-claude-setup --scope user --remove`.
+
+> ¿Sin cuenta de Anthropic? Añade `--auth-mode local-token` a `agy-claude-setup` (o `--local-token` a `install.sh`).
+
+### Codex
+
+Configuración manual:
+
+```bash
+cd codex
+codex plugin marketplace add .
+codex plugin add agi@local-repo
+node ./plugins/agi/scripts/setup-codex.mjs --start-bridge
+```
+
+Inicia Codex con el perfil `agy` (`codex -p agy`), ejecuta `$agy-connect` para iniciar sesión o refrescar modelos y cambia entre `agy/*` y modelos OpenAI desde `/model`. Usa `--mode default` en `setup-codex.mjs` si prefieres no escribir `-p agy` cada vez.
+
+### OpenCode
+
+Copia `opencode/plugins/agi` a `.opencode/plugins/agi/` en tu proyecto o añádelo en `opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "./opencode/plugins/agi",
+      "options": {
+        "providerId": "agy",
+        "providerName": "Antigravity (ACP)"
+      }
+    }
+  ]
+}
+```
+
+Dentro de OpenCode, ejecuta `/connect`, selecciona **Antigravity (ACP)** e inicia sesión con `agy acp --login` o `GEMINI_API_KEY`. Los modelos aparecerán en `/model` y `opencode models`. También tienes `/agy-connect` (`status` | `refresh` | `logout`) y `/agy-models`.
+
+### DeepSeek Harness
+
+Para enlazarlo manualmente:
+
+```bash
+node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
+```
+
+Reinicia DeepSeek Harness, usa `/agy-connect` para revisar el estado o iniciar sesión (por ejemplo, `/agy-connect method gemini-api-key` o `node ./deepseek-harness/plugins/agi/scripts/agy-dsh-connect.mjs`) y elige `agy/<model>` en el selector. También incluye `/agy-models` y `/agy-status`.
+
+---
+
+## Variables de entorno
+
+| Variable | Por defecto | Descripción |
+| --- | --- | --- |
+| `AGY_BIN` | `agy` | Ruta al binario `agy` |
+| `GEMINI_API_KEY` | — | Clave de API de Gemini opcional |
+| `AGY_GEMINI_DIR` | `~/.agi/antigravity` | Carpeta separada para ACP |
+| `AGY_CLAUDE_PORT` | `43110` | Puerto del puente local de Claude Code |
+| `AGY_CODEX_PORT` | `43111` | Puerto del puente local de Codex |
+| `DSH_HOME` | `~/.dsh` | Directorio de DeepSeek Harness |
 
 ---
 
