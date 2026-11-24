@@ -17,4 +17,4 @@ This plugin bundles a local OpenAI Responses API bridge (`agy-codex-bridge.mjs`)
 
 ## Authentication
 
-If `agy_status` reports `authenticated: false`, run `agy acp --login` or export `GEMINI_API_KEY`, then call `agy_refresh_models`.
+Invoke `$agy-connect` inside Codex (or call the `agy_connect` MCP tool / run `node scripts/agy-codex-connect.mjs`) to sign in via official `agy acp --login`, authenticate with `GEMINI_API_KEY` / Gemini Enterprise, refresh models, or log out.

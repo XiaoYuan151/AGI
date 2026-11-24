@@ -84,6 +84,28 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "agy_connect",
+    description:
+      "Inspect or manage official Google Antigravity ACP sign-in (`agy acp --login`, official ACP `authenticate`, or official ACP `logout`) and refresh the Codex bridge & model catalog.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["status", "authenticate", "refresh", "logout"],
+          description:
+            "'status' shows auth state and official login command; 'authenticate' calls official ACP authenticate (e.g. gemini-api-key, oauth-business, agent-platform); 'refresh' restarts/refreshes after interactive `agy acp --login`; 'logout' calls official ACP logout.",
+        },
+        methodId: {
+          type: "string",
+          description:
+            "Official ACP auth method ID when action='authenticate' (gemini-api-key, oauth-business, agent-platform).",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function getBridgeHostPort() {
@@ -93,10 +115,13 @@ function getBridgeHostPort() {
   };
 }
 
-async function fetchBridgeJson(pathname, method = "GET", timeoutMs = 4000) {
+async function fetchBridgeJson(pathname, method = "GET", timeoutMs = 4000, body = undefined) {
   const { host, port } = getBridgeHostPort();
+  const headers = body !== undefined ? { "Content-Type": "application/json" } : undefined;
   const res = await fetch(`http://${host}:${port}${pathname}`, {
     method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(timeoutMs),
   });
   const data = await res.json();
@@ -178,6 +203,112 @@ async function handleToolCall(name, args = {}) {
       });
     }
     return result;
+  }
+
+  if (name === "agy_connect") {
+    const action = args.action || "status";
+    if (action === "logout") {
+      try {
+        const { data } = await fetchBridgeJson("/v1/auth/logout", "POST", 8000);
+        return data;
+      } catch {
+        const client = new AgyAcpClient();
+        try {
+          const res = await client.logout(8000);
+          return { ...res, loginCommand: client.formatLoginCommand() };
+        } finally {
+          await client.dispose();
+        }
+      }
+    }
+
+    if (action === "authenticate") {
+      const methodId =
+        typeof args.methodId === "string" && args.methodId.trim()
+          ? args.methodId.trim()
+          : "gemini-api-key";
+      try {
+        const { status, data } = await fetchBridgeJson(
+          "/v1/auth/authenticate",
+          "POST",
+          10000,
+          { methodId },
+        );
+        if (status >= 400) {
+          throw new Error(data?.error?.message || `Authentication failed (${status})`);
+        }
+        return data;
+      } catch (err) {
+        if (/fetch failed|ECONNREFUSED|AbortError/i.test(String(err?.message || ""))) {
+          const client = new AgyAcpClient();
+          try {
+            await client.authenticate(methodId, 10000);
+            const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 8000 });
+            return {
+              ok: true,
+              methodId,
+              authenticated: discovery.authenticated,
+              source: discovery.source,
+              modelsCount: discovery.models.length,
+            };
+          } finally {
+            await client.dispose();
+          }
+        }
+        throw err;
+      }
+    }
+
+    if (action === "refresh") {
+      try {
+        const { data } = await fetchBridgeJson("/v1/refresh?restart=1", "POST", 8000);
+        return data;
+      } catch {
+        const client = new AgyAcpClient();
+        try {
+          const discovery = await client.discoverModels({ forceRefresh: true, timeoutMs: 8000 });
+          return {
+            ok: true,
+            source: discovery.source,
+            authenticated: discovery.authenticated,
+            error: discovery.error || null,
+            models: formatOpenAiModelsList(discovery.models).data,
+          };
+        } finally {
+          await client.dispose();
+        }
+      }
+    }
+
+    try {
+      const { data } = await fetchBridgeJson("/v1/auth", "GET", 4000);
+      return {
+        ...data,
+        connectScript: "node scripts/agy-codex-connect.mjs",
+        tosNote:
+          "Uses Google's official unmodified `agy acp` stdio protocol and `agy acp --login`. For third-party/automated harness usage, GEMINI_API_KEY or Gemini Enterprise (oauth-business / agent-platform) is recommended.",
+      };
+    } catch {
+      const client = new AgyAcpClient();
+      try {
+        try {
+          await client.initialize(4000);
+        } catch {
+          // ignore init failure when reporting status
+        }
+        return {
+          ok: true,
+          harness: "codex",
+          bridgeRunning: false,
+          ...client.getAuthInfo(),
+          connectScript: "node scripts/agy-codex-connect.mjs",
+          tosNote:
+            "Uses Google's official unmodified `agy acp` stdio protocol and `agy acp --login`. For third-party/automated harness usage, GEMINI_API_KEY or Gemini Enterprise (oauth-business / agent-platform) is recommended.",
+        };
+      } finally {
+        await client.dispose();
+      }
+    }
   }
 
   throw new Error(`Unknown tool: ${name}`);

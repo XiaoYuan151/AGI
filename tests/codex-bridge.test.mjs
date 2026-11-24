@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { AgyAcpClient } from "../codex/plugins/agi/scripts/lib/agy-acp-client.mjs";
 import { createCodexBridgeServer } from "../codex/plugins/agi/scripts/agy-codex-bridge.mjs";
 import { configureCodex } from "../codex/plugins/agi/scripts/setup-codex.mjs";
+import { runCodexConnect } from "../codex/plugins/agi/scripts/agy-codex-connect.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOCK_AGY_BIN = path.join(__dirname, "fixtures", "mock-agy");
@@ -239,6 +240,7 @@ test("agy-codex-mcp.mjs responds to initialize, tools/list, and tools/call", asy
     const list = await nextMessage();
     const names = list.result.tools.map((t) => t.name);
     assert.ok(names.includes("agy_status"));
+    assert.ok(names.includes("agy_connect"));
     assert.ok(names.includes("agy_list_models"));
     assert.ok(names.includes("agy_configure_codex"));
 
@@ -254,8 +256,103 @@ test("agy-codex-mcp.mjs responds to initialize, tools/list, and tools/call", asy
     const payload = JSON.parse(call.result.content[0].text);
     assert.equal(payload.source, "acp");
     assert.ok(payload.data.some((m) => m.id === "agy/gemini-custom-preview"));
+
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "agy_connect", arguments: { action: "status" } },
+      })}\n`,
+    );
+    const connectCall = await nextMessage();
+    const connectPayload = JSON.parse(connectCall.result.content[0].text);
+    assert.equal(connectPayload.ok, true);
+    assert.equal(connectPayload.harness, "codex");
+    assert.equal(connectPayload.canLogout, true);
+    assert.match(connectPayload.loginCommand, /--login/);
   } finally {
     rl.close();
     child.kill("SIGTERM");
+  }
+});
+
+test("Codex bridge /v1/auth endpoints and agy-codex-connect support official login, authenticate, refresh, and logout", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-codex-connect-"));
+  const geminiDir = path.join(tmpDir, "antigravity");
+  const env = {
+    ...process.env,
+    MOCK_ACP_REQUIRE_AUTH: "1",
+    GEMINI_API_KEY: "",
+  };
+  const acpClient = new AgyAcpClient({
+    agyBin: MOCK_AGY_BIN,
+    geminiDir,
+    appDataDir: "antigravity-acp",
+    usePersistedConfig: false,
+    env,
+  });
+  const bridge = createCodexBridgeServer({
+    host: "127.0.0.1",
+    port: 0,
+    acpClient,
+  });
+
+  try {
+    await bridge.start();
+    const baseUrl = bridge.getUrl();
+
+    const auth0 = await (await fetch(`${baseUrl}/v1/auth`)).json();
+    assert.equal(auth0.ok, true);
+    assert.notEqual(auth0.authenticated, true);
+    assert.equal(auth0.canLogout, true);
+
+    const loginRes = await runCodexConnect({
+      action: "login",
+      host: "127.0.0.1",
+      port: bridge.port,
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      usePersistedConfig: false,
+      env,
+      stdio: "pipe",
+    });
+    assert.equal(loginRes.ok, true);
+    assert.equal(loginRes.bridgeReachable, true);
+    assert.equal(loginRes.authenticated, true);
+    assert.equal(loginRes.source, "acp");
+    assert.ok(loginRes.modelsCount >= 3);
+
+    const logoutRes = await runCodexConnect({
+      action: "logout",
+      host: "127.0.0.1",
+      port: bridge.port,
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      usePersistedConfig: false,
+      env,
+    });
+    assert.equal(logoutRes.ok, true);
+    assert.equal(logoutRes.bridgeReachable, true);
+
+    const authAfterLogout = await (await fetch(`${baseUrl}/v1/auth`)).json();
+    assert.equal(authAfterLogout.authenticated, false);
+
+    await acpClient.setApiKey("codex-connect-key");
+    const authApiRes = await fetch(`${baseUrl}/v1/auth/authenticate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ methodId: "gemini-api-key" }),
+    });
+    assert.equal(authApiRes.status, 200);
+    const authApiJson = await authApiRes.json();
+    assert.equal(authApiJson.ok, true);
+    assert.equal(authApiJson.authenticated, true);
+    assert.equal(authApiJson.source, "acp");
+  } finally {
+    await bridge.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

@@ -156,6 +156,11 @@ export function createCodexBridgeServer(options = {}) {
       }
 
       if (req.method === "POST" && pathname === "/v1/refresh") {
+        if (url.searchParams.get("restart") === "1") {
+          await acpClient.restart();
+        } else {
+          acpClient.clearCooldown();
+        }
         const discovery = await refreshModels({
           forceRefresh: true,
           timeoutMs: 8000,
@@ -166,6 +171,71 @@ export function createCodexBridgeServer(options = {}) {
           authenticated: discovery.authenticated,
           error: discovery.error || null,
           models: formatOpenAiModelsList(discovery.models).data,
+        });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/v1/auth") {
+        try {
+          await acpClient.initialize(4000);
+        } catch {
+          // Return best-effort auth info even if agy acp cannot initialize yet
+        }
+        sendJson(res, 200, {
+          ok: true,
+          harness: "codex",
+          ...acpClient.getAuthInfo(),
+          modelSource: cachedDiscovery.source,
+          modelsCount: cachedModels.length,
+        });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/auth/authenticate") {
+        const rawBody = await readRawBody(req);
+        let body = {};
+        if (rawBody.length > 0) {
+          try {
+            body = JSON.parse(rawBody.toString("utf8"));
+          } catch {
+            sendOpenAiError(
+              res,
+              400,
+              "invalid_json",
+              "Invalid JSON request body",
+              "invalid_request_error",
+            );
+            return;
+          }
+        }
+        const methodId =
+          typeof body?.methodId === "string" && body.methodId.trim()
+            ? body.methodId.trim()
+            : "gemini-api-key";
+        await acpClient.authenticate(methodId, 10000);
+        const discovery = await refreshModels({ forceRefresh: true, timeoutMs: 8000 });
+        sendJson(res, 200, {
+          ok: true,
+          methodId,
+          authenticated: discovery.authenticated,
+          source: discovery.source,
+          modelsCount: discovery.models.length,
+          models: formatOpenAiModelsList(discovery.models).data,
+        });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/auth/logout") {
+        const logoutResult = await acpClient.logout(8000);
+        cachedDiscovery = {
+          models: [...acpClient.fallbackModels],
+          source: "fallback",
+          authenticated: false,
+        };
+        cachedModels = [...acpClient.fallbackModels];
+        sendJson(res, 200, {
+          ...logoutResult,
+          loginCommand: acpClient.formatLoginCommand(),
         });
         return;
       }
