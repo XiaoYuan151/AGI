@@ -1,0 +1,14 @@
+{
+  "name": "local-agi",
+  "description": "Local AGI Antigravity ACP plugin marketplace for Claude Code",
+  "owner": {
+    "name": "XiaoYuan151"
+  },
+  "plugins": [
+    {
+      "name": "agi",
+      "description": "Native Antigravity (agy acp) /model integration and greeting tools for Claude Code",
+      "source": "./plugins/agi"
+    }
+  ]
+}

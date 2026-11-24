@@ -21,6 +21,33 @@ Under the hood, each plugin spawns **`agy acp`** (Antigravity's Agent Client Pro
 
 ---
 
+## Quick Install (`./install.sh`)
+
+Run the included installer from the repository root to set up all detected harnesses (**Claude Code**, **Codex**, and **OpenCode V2**) with T3 Code's safe Antigravity ACP profile model:
+
+```bash
+chmod +x ./install.sh
+./install.sh
+```
+
+### How it avoids Antigravity account bans (T3 Code model)
+
+- **Official `agy acp` subprocess only:** Never scrapes OAuth tokens from `~/.gemini`, Keychain, or Antigravity IDE, never proxies or spoofs `cloudcode-pa` HTTP endpoints, and never overrides User-Agent headers.
+- **Isolated ACP profile (`--gemini-dir ~/.agi/antigravity --app-data-dir antigravity-acp`):** Matches T3 Code's `antigravity-acp` isolation so ACP sessions and credentials never collide with your interactive `agy` CLI or Antigravity desktop IDE. Persisted in `~/.agi/acp.json` and shared across all three plugins.
+- **Retry-loop protection:** Auth failures (`-32000`) and policy/quota errors (`403` / `429` / `PERMISSION_DENIED`) trigger an immediate local cooldown instead of hammering `session/new` in tight loops.
+
+Common `install.sh` flags:
+
+```bash
+./install.sh --all                     # Install all 3 plugins even if a CLI is not on PATH yet
+./install.sh --claude --local-token    # Install Claude Code with gateway discovery (no Anthropic account)
+./install.sh --codex --codex-mode default  # Merge agy into ~/.codex/config.toml directly
+./install.sh --dry-run                 # Preview actions without modifying files
+./install.sh --uninstall               # Remove plugin registrations, settings, and stop bridges
+```
+
+---
+
 ## 1. Prerequisites
 
 Before using any of the plugins, make sure you have:
