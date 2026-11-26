@@ -36,7 +36,11 @@ test("root package exports public API and npm pack includes all plugin files & d
       "package.json",
       "bin/agi.mjs",
       "src/index.mjs",
+      "src/core/acp-client.mjs",
+      "src/core/index.mjs",
       "src/installer.mjs",
+      "src/installers/registry.mjs",
+      "src/services/account-service.mjs",
       "scripts/accounts.mjs",
       "scripts/select-agents.mjs",
       "install.sh",
@@ -51,6 +55,9 @@ test("root package exports public API and npm pack includes all plugin files & d
       "opencode/plugins/agi/src/index.ts",
       "deepseek-harness/plugins/agi/package.json",
       "deepseek-harness/plugins/agi/src/index.mjs",
+      "deepseek-harness/plugins/agi/src/client/index.js",
+      "deepseek-harness/plugins/agi/locale/en.json",
+      "deepseek-harness/plugins/agi/scripts/agy-dsh-gui.mjs",
     ];
     for (const rel of requiredFiles) {
       assert.ok(packedPaths.has(rel), `Expected packed tarball to include '${rel}'`);

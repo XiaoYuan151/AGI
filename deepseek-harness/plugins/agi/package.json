@@ -1,7 +1,7 @@
 {
   "name": "@local/dsh-agi",
   "version": "0.3.0",
-  "description": "DeepSeek Harness plugin integrating Google Antigravity ACP (agy acp) as a native LLM provider with /agy-connect, /agy-models, and /agy-status commands.",
+  "description": "DeepSeek Harness plugin integrating Google Antigravity ACP (agy acp) as a native LLM provider with a Settings GUI for account login and multi-account management.",
   "type": "module",
   "main": "src/index.mjs",
   "license": "MIT",
@@ -17,14 +17,33 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
     }
   },
   "exports": {
     ".": "./src/index.mjs",
     "./adapter": "./src/adapter.mjs",
+    "./client": "./src/client/index.js",
+    "./gui-service": "./src/gui-service.mjs",
+    "./gui-server": "./src/gui-server.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
+  "files": [
+    "src",
+    "scripts",
+    "locale",
+    "cordis.patch.yml",
+    "README.md"
+  ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
     "@deepseek-ai/dsh-llm": ">=0.1.0",

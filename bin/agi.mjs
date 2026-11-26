@@ -29,6 +29,7 @@ function printHelp() {
       "  agi uninstall [options]                 Remove plugin configurations (--purge also deletes ~/.agi)",
       "  agi account <cmd> [options]             Manage multi-account profiles & isolated data folders",
       "  agi connect [harness] [options]         Run official sign-in / auth flow for claude | codex | dsh",
+      "  agi gui [options]                       Launch standalone DeepSeek Harness GUI for login & account management",
       "  agi bridge <claude|codex> <cmd>         Manage local bridges (start | ensure | status | stop | restart | models)",
       "  agi status [--json]                     Inspect installed version, accounts, and running bridges",
       "  agi --version                           Show package version",
@@ -264,6 +265,19 @@ function runConnectCommand(argv) {
   return res.status ?? 0;
 }
 
+function runGuiCommand(argv) {
+  const scriptPath = path.join(
+    PACKAGE_ROOT,
+    "deepseek-harness",
+    "plugins",
+    "agi",
+    "scripts",
+    "agy-dsh-gui.mjs",
+  );
+  const res = spawnSync(process.execPath, [scriptPath, ...argv], { stdio: "inherit" });
+  return res.status ?? 0;
+}
+
 export async function runCli(argv = process.argv.slice(2)) {
   const tokens = [...argv];
   let sub = "install";
@@ -294,6 +308,8 @@ export async function runCli(argv = process.argv.slice(2)) {
       return runBridgeCommand(tokens.slice(1));
     } else if (candidate === "connect") {
       return runConnectCommand(tokens.slice(1));
+    } else if (candidate === "gui" || candidate === "dsh-gui") {
+      return runGuiCommand(tokens.slice(1));
     } else if (candidate === "status") {
       sub = "status";
       tokens.shift();

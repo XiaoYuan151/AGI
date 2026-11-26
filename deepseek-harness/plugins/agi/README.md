@@ -3,7 +3,8 @@
 Native DeepSeek Harness Cordis bundle (`@local/dsh-agi`). Zero build steps and zero third-party npm runtime dependencies.
 
 - **Native LLM Provider (`agy`)**: Registers an in-process `LlmAdapter` via `ctx.llm.registerAdapter(["agy"], adapter)` backed directly by Google's official `agy acp` over stdio JSON-RPC 2.0 (no local HTTP bridge daemon needed).
-- **Native Slash Commands**: Registers `/agy-connect`, `/agy-models`, `/agy-status`, and `/agy-accounts` via `ctx.commands.register(...)`.
+- **Native Slash Commands**: Registers `/agy-connect`, `/agy-models`, `/agy-status`, `/agy-accounts`, and `/agy-gui` via `ctx.commands.register(...)`.
+- **Native Settings & Standalone Account GUI**: Renders an **Antigravity (ACP)** panel in DeepSeek Harness **Settings** and **Plugins** views (backed by `POST/GET /api/agi`), plus a standalone local web GUI (`agy-dsh-gui` / `agi gui` / `/agy-gui start`) for signing in and managing isolated multi-account profiles.
 - **Isolated ACP Profile & Multi-Account**: Reads `~/.agi/acp.json` (each account saved to its own `--gemini-dir` data folder + `--app-data-dir antigravity-acp`) and uses only Google's official unmodified `agy acp` subprocess and `agy acp --login` / official ACP `authenticate` & `logout` RPCs.
 
 ## Install into DeepSeek Harness

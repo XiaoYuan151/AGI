@@ -14,15 +14,26 @@ export {
   AgyAcpClient,
   AgyAuthRequiredError,
   AgyPolicyCooldownError,
+  CooldownPolicy,
   DEFAULT_FALLBACK_MODELS,
+  FileAccountStore,
+  FileModelsCache,
+  InteractiveLoginManager,
+  JsonRpcStdioTransport,
   buildLoginCommandArgs,
+  clearAccountApiKey,
+  clearCachedDiscoveryEntry,
   expandHomePath,
+  extractAuthUrlFromOutput,
   extractEffortConfigFromSessionResult,
   extractModelsFromSessionResult,
   listPersistedAccounts,
+  normalizeAuthMethodId,
   normalizeModelId,
   normalizePersistedAcpConfig,
   parseFallbackModels,
+  readAccountApiKey,
+  readCachedDiscovery,
   readPersistedAcpConfig,
   removePersistedAccount,
   resolveAccountProfile,
@@ -33,8 +44,13 @@ export {
   setActivePersistedAccount,
   upsertPersistedAccount,
   validateAccountName,
+  writeAccountApiKey,
+  writeCachedDiscovery,
   writePersistedAcpConfig,
-} from "../claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs";
+} from "./core/index.mjs";
+
+export { AccountService, BridgeNotifier } from "./services/account-service.mjs";
+export { DEFAULT_HARNESS_REGISTRY, HarnessRegistry } from "./installers/registry.mjs";
 
 export {
   accountStatus,
@@ -84,5 +100,11 @@ export {
 export { configureCodex } from "../codex/plugins/agi/scripts/setup-codex.mjs";
 export { runCodexConnect } from "../codex/plugins/agi/scripts/agy-codex-connect.mjs";
 
-export { configureDsh, configureDshProfile, listDshProfiles } from "../deepseek-harness/plugins/agi/scripts/setup-dsh.mjs";
+export {
+  configureDsh,
+  configureDshProfile,
+  listDshProfiles,
+} from "../deepseek-harness/plugins/agi/scripts/setup-dsh.mjs";
 export { runDshConnect } from "../deepseek-harness/plugins/agi/scripts/agy-dsh-connect.mjs";
+export { AgyDshGuiService } from "../deepseek-harness/plugins/agi/src/gui-service.mjs";
+export { createDshGuiServer } from "../deepseek-harness/plugins/agi/src/gui-server.mjs";
