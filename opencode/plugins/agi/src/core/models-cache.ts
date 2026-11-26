@@ -1,0 +1,187 @@
+import fs from "node:fs";
+import path from "node:path";
+import { resolveAcpConfigPath, resolveAgiHome } from "./account-store";
+import { type AgyDiscoveryResult, parseFallbackModels } from "./model-catalog";
+
+export function resolveModelsCachePath(env: NodeJS.ProcessEnv = process.env): string {
+  if (!resolveAcpConfigPath(env)) return "";
+  return path.join(resolveAgiHome(env), "models-cache.json");
+}
+
+export class FileModelsCache {
+  env: NodeJS.ProcessEnv;
+
+  constructor({ env = process.env }: { env?: NodeJS.ProcessEnv } = {}) {
+    this.env = env;
+  }
+
+  resolvePath(): string {
+    return resolveModelsCachePath(this.env);
+  }
+
+  private _readFile(): {
+    version: number;
+    entries: Record<string, Record<string, unknown>>;
+  } {
+    const cachePath = this.resolvePath();
+    if (!cachePath) return { version: 1, entries: {} };
+    try {
+      if (!fs.existsSync(cachePath)) return { version: 1, entries: {} };
+      const raw = fs.readFileSync(cachePath, "utf8").trim();
+      if (!raw) return { version: 1, entries: {} };
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        parsed.entries &&
+        typeof parsed.entries === "object" &&
+        !Array.isArray(parsed.entries)
+      ) {
+        return {
+          version: 1,
+          entries: parsed.entries as Record<string, Record<string, unknown>>,
+        };
+      }
+    } catch {
+      // Ignore corrupt cache files
+    }
+    return { version: 1, entries: {} };
+  }
+
+  private _writeFile(cache: {
+    version: number;
+    entries: Record<string, Record<string, unknown>>;
+  }): boolean {
+    const cachePath = this.resolvePath();
+    if (!cachePath) return false;
+    let tmpPath = "";
+    try {
+      const dir = path.dirname(cachePath);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      try {
+        fs.chmodSync(dir, 0o700);
+      } catch {
+        // ignore
+      }
+      tmpPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmpPath, `${JSON.stringify(cache, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      fs.renameSync(tmpPath, cachePath);
+      tmpPath = "";
+      try {
+        fs.chmodSync(cachePath, 0o600);
+      } catch {
+        // ignore
+      }
+      return true;
+    } catch {
+      if (tmpPath) {
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {
+          // ignore
+        }
+      }
+      return false;
+    }
+  }
+
+  read(cacheKey: string): AgyDiscoveryResult | null {
+    if (!cacheKey) return null;
+    const cache = this._readFile();
+    const entry = cache.entries?.[cacheKey];
+    if (!entry || typeof entry !== "object") return null;
+    if (!Array.isArray(entry.models) || entry.models.length === 0) {
+      return null;
+    }
+    const models = parseFallbackModels(entry.models);
+    if (models.length === 0) return null;
+
+    return {
+      models: models.map((m) => ({ ...m, efforts: [...m.efforts] })),
+      source: "acp",
+      authenticated: entry.authenticated === true ? true : null,
+      modelConfigId: typeof entry.modelConfigId === "string" ? entry.modelConfigId : null,
+      currentModelId:
+        typeof entry.currentModelId === "string" ? entry.currentModelId : models[0]?.id || null,
+      effortConfig:
+        entry.effortConfig && typeof entry.effortConfig === "object"
+          ? (entry.effortConfig as AgyDiscoveryResult["effortConfig"])
+          : null,
+      agentInfo:
+        entry.agentInfo && typeof entry.agentInfo === "object"
+          ? (entry.agentInfo as Record<string, unknown>)
+          : null,
+      authMethods: Array.isArray(entry.authMethods)
+        ? (entry.authMethods as Array<Record<string, unknown>>)
+        : [],
+    };
+  }
+
+  write(cacheKey: string, discovery: AgyDiscoveryResult): boolean {
+    if (
+      !cacheKey ||
+      !discovery ||
+      discovery.source !== "acp" ||
+      !Array.isArray(discovery.models) ||
+      discovery.models.length === 0
+    ) {
+      return false;
+    }
+    const cache = this._readFile();
+    cache.entries[cacheKey] = {
+      updatedAt: Date.now(),
+      authenticated: discovery.authenticated === true,
+      modelConfigId: discovery.modelConfigId || null,
+      currentModelId: discovery.currentModelId || discovery.models[0]?.id || null,
+      effortConfig: discovery.effortConfig || null,
+      agentInfo: discovery.agentInfo || null,
+      authMethods: Array.isArray(discovery.authMethods) ? discovery.authMethods : [],
+      models: discovery.models.map((m) => ({
+        id: m.id,
+        name: m.name,
+        description: m.description,
+        contextWindow: m.contextWindow,
+        maxOutputTokens: m.maxOutputTokens,
+        supportsImages: m.supportsImages,
+        efforts: [...m.efforts],
+      })),
+    };
+    return this._writeFile(cache);
+  }
+
+  clear(cacheKey: string): boolean {
+    if (!cacheKey) return false;
+    const cachePath = this.resolvePath();
+    if (!cachePath || !fs.existsSync(cachePath)) return false;
+    const cache = this._readFile();
+    if (!cache.entries?.[cacheKey]) return false;
+    delete cache.entries[cacheKey];
+    return this._writeFile(cache);
+  }
+}
+
+export function readCachedDiscovery(
+  cacheKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AgyDiscoveryResult | null {
+  return new FileModelsCache({ env }).read(cacheKey);
+}
+
+export function writeCachedDiscovery(
+  cacheKey: string,
+  discovery: AgyDiscoveryResult,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return new FileModelsCache({ env }).write(cacheKey, discovery);
+}
+
+export function clearCachedDiscoveryEntry(
+  cacheKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return new FileModelsCache({ env }).clear(cacheKey);
+}
