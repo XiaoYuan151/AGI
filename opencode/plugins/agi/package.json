@@ -1,6 +1,6 @@
 {
   "name": "agi",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Sample OpenCode plugin with hello_greet plus native Antigravity (agy acp) provider and /model switching.",
   "exports": {

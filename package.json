@@ -1,6 +1,6 @@
 {
   "name": "@xiaoyuan151/agi",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Anti-Gravity Integration (AGI): native Antigravity (agy acp) plugins, local bridges, multi-account profile manager, and installer/updater for Claude Code, Codex, OpenCode, and DeepSeek Harness.",
   "type": "module",
   "license": "MIT",
