@@ -38,13 +38,15 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
-    "./acp-client": "./claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs",
+    "./acp-client": "./src/core/acp-client.mjs",
+    "./core": "./src/core/index.mjs",
     "./accounts": "./scripts/accounts.mjs",
     "./installer": "./src/installer.mjs",
     "./cli": "./bin/agi.mjs",
     "./claude": "./claude-code/plugins/agi/scripts/agy-claude-bridge.mjs",
     "./codex": "./codex/plugins/agi/scripts/agy-codex-bridge.mjs",
     "./dsh": "./deepseek-harness/plugins/agi/src/index.mjs",
+    "./dsh-gui": "./deepseek-harness/plugins/agi/src/gui-server.mjs",
     "./opencode": "./opencode/plugins/agi/src/index.ts",
     "./package.json": "./package.json"
   },
@@ -57,6 +59,7 @@
     "agy-codex-connect": "./codex/plugins/agi/scripts/agy-codex-connect.mjs",
     "agy-codex-setup": "./codex/plugins/agi/scripts/setup-codex.mjs",
     "agy-dsh-connect": "./deepseek-harness/plugins/agi/scripts/agy-dsh-connect.mjs",
+    "agy-dsh-gui": "./deepseek-harness/plugins/agi/scripts/agy-dsh-gui.mjs",
     "agy-dsh-setup": "./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs"
   },
   "files": [
@@ -78,9 +81,11 @@
   ],
   "scripts": {
     "agi": "node ./bin/agi.mjs",
+    "sync:core": "node scripts/sync-core.mjs",
+    "check:core": "node scripts/sync-core.mjs --check",
     "test": "node --test tests/acp-client.test.mjs tests/claude-bridge.test.mjs tests/codex-bridge.test.mjs tests/dsh-plugin.test.mjs tests/install.test.mjs tests/npm-package.test.mjs",
     "test:opencode": "bun test tests/opencode-plugin.test.mjs",
-    "test:all": "npm test && npm run test:opencode",
+    "test:all": "npm run check:core && npm test && npm run test:opencode",
     "pack:check": "npm pack --dry-run"
   }
 }

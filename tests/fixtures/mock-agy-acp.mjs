@@ -22,16 +22,28 @@ const markerPath =
   (geminiDir ? path.join(geminiDir, ".mock-logged-in") : "");
 
 if (process.argv.includes("--login")) {
-  if (process.env.MOCK_ACP_LOGIN_FAIL === "1") {
-    console.error("Mock login failed");
-    process.exit(1);
+  if (process.env.MOCK_ACP_LOGIN_URL) {
+    console.log(`Please visit: ${process.env.MOCK_ACP_LOGIN_URL}`);
   }
-  if (markerPath) {
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    fs.writeFileSync(markerPath, "ok\n", "utf8");
+  const delayMs = Math.max(0, Number(process.env.MOCK_ACP_LOGIN_DELAY_MS || 0));
+  const finishLogin = () => {
+    if (process.env.MOCK_ACP_LOGIN_FAIL === "1") {
+      console.error("Mock login failed");
+      process.exit(1);
+    }
+    if (markerPath) {
+      fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+      fs.writeFileSync(markerPath, "ok\n", "utf8");
+    }
+    console.log("Logged in to Mock Antigravity ACP.");
+    process.exit(0);
+  };
+  if (delayMs > 0) {
+    setTimeout(finishLogin, delayMs);
+    await new Promise(() => {});
+  } else {
+    finishLogin();
   }
-  console.log("Logged in to Mock Antigravity ACP.");
-  process.exit(0);
 }
 
 const requireAuth = process.env.MOCK_ACP_REQUIRE_AUTH === "1";

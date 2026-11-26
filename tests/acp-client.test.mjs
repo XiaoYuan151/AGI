@@ -8,17 +8,24 @@ import {
   AgyAcpClient,
   AgyAuthRequiredError,
   AgyPolicyCooldownError,
+  CooldownPolicy,
+  InteractiveLoginManager,
   buildLoginCommandArgs,
+  clearAccountApiKey,
+  extractAuthUrlFromOutput,
   extractModelsFromSessionResult,
   listPersistedAccounts,
   normalizeModelId,
   parseFallbackModels,
+  readAccountApiKey,
   readPersistedAcpConfig,
   removePersistedAccount,
   runAgyInteractiveLogin,
   setActivePersistedAccount,
   upsertPersistedAccount,
+  writeAccountApiKey,
 } from "../claude-code/plugins/agi/scripts/lib/agy-acp-client.mjs";
+import { checkCoreSync } from "../scripts/sync-core.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOCK_AGY_BIN = path.join(__dirname, "fixtures", "mock-agy");
@@ -723,6 +730,119 @@ test("AgyAcpClient persists models cache, preserves live catalog on transient ti
       await unauthClient.dispose();
     }
   } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("core mirror files stay in sync across root and all standalone plugins", () => {
+  const report = checkCoreSync();
+  assert.equal(report.ok, true, `Core mirror drift: ${JSON.stringify(report)}`);
+});
+
+test("per-account .agi-credentials.json isolates API keys with 0600 perms and clears on logout", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agi-creds-"));
+  const agiHome = path.join(tmpRoot, "agi-home");
+  const workDir = path.join(tmpRoot, "work-gemini");
+  const personalDir = path.join(tmpRoot, "personal-gemini");
+  const baseEnv = { ...process.env, AGI_HOME: agiHome };
+
+  try {
+    upsertPersistedAccount({ name: "work", dataDir: workDir }, baseEnv);
+    upsertPersistedAccount({ name: "personal", dataDir: personalDir, activate: false }, baseEnv);
+
+    const written = writeAccountApiKey(workDir, "AIza-work-secret-key", baseEnv);
+    assert.equal(written, true);
+    const credPath = path.join(workDir, ".agi-credentials.json");
+    const mode = fs.statSync(credPath).mode & 0o777;
+    assert.equal(mode, 0o600);
+    assert.equal(readAccountApiKey(workDir, baseEnv), "AIza-work-secret-key");
+    assert.equal(readAccountApiKey(personalDir, baseEnv), "");
+
+    // Must never be stored in ~/.agi/acp.json
+    const acpJson = fs.readFileSync(path.join(agiHome, "acp.json"), "utf8");
+    assert.equal(acpJson.includes("AIza-work-secret-key"), false);
+
+    // Client loads stored account key automatically for 'work', not 'personal'
+    const workClient = new AgyAcpClient({
+      agyBin: MOCK_AGY_BIN,
+      account: "work",
+      env: { ...baseEnv, MOCK_ACP_REQUIRE_AUTH: "1" },
+    });
+    try {
+      const authStatus = workClient.getAuthInfo();
+      assert.equal(authStatus.hasStoredAccountKey, true);
+      assert.equal(authStatus.apiKeySource, "account");
+      const disc = await workClient.discoverModels({ forceRefresh: true });
+      assert.equal(disc.authenticated, true);
+
+      await workClient.logout();
+      assert.equal(readAccountApiKey(workDir, baseEnv), "");
+    } finally {
+      await workClient.dispose();
+    }
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("CooldownPolicy and InteractiveLoginManager handle backoff, OAuth URL capture, and cancel", async () => {
+  const policy = new CooldownPolicy({ authCooldownMs: 5000, policyCooldownMs: 5000 });
+  assert.equal(policy.isAuthCoolingDown(), false);
+  policy.tripAuth();
+  assert.equal(policy.isAuthCoolingDown(), true);
+  policy.tripPolicy(new Error("rate limit"));
+  assert.throws(() => policy.checkPolicy(), AgyPolicyCooldownError);
+  policy.clear();
+  assert.equal(policy.isAuthCoolingDown(), false);
+  assert.doesNotThrow(() => policy.checkPolicy());
+
+  assert.equal(
+    extractAuthUrlFromOutput("Open https://accounts.google.com/o/oauth2/auth?client_id=123 to continue."),
+    "https://accounts.google.com/o/oauth2/auth?client_id=123",
+  );
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agi-login-mgr-"));
+  const geminiDir = path.join(tmpRoot, "gemini");
+  const manager = new InteractiveLoginManager();
+  try {
+    let completed = null;
+    manager.start({
+      account: "work",
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      env: {
+        ...process.env,
+        MOCK_ACP_LOGIN_URL: "https://accounts.google.com/o/oauth2/v2/auth?code_challenge=abc",
+        MOCK_ACP_LOGIN_DELAY_MS: "80",
+      },
+      onComplete: (snap) => {
+        completed = snap;
+      },
+    });
+
+    const deadline = Date.now() + 5000;
+    while (!completed && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.ok(completed);
+    assert.equal(completed.status, "succeeded");
+    assert.equal(completed.authUrl, "https://accounts.google.com/o/oauth2/v2/auth?code_challenge=abc");
+    assert.equal(fs.existsSync(path.join(geminiDir, ".mock-logged-in")), true);
+
+    // Verify cancel stops a slow login cleanly
+    manager.start({
+      account: "work",
+      agyBin: MOCK_AGY_BIN,
+      geminiDir,
+      appDataDir: "antigravity-acp",
+      env: { ...process.env, MOCK_ACP_LOGIN_DELAY_MS: "5000" },
+    });
+    const cancelled = manager.cancel();
+    assert.equal(cancelled.status, "cancelled");
+  } finally {
+    manager.dispose();
+    clearAccountApiKey(geminiDir);
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
