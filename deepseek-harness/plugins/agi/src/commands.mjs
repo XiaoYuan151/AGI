@@ -263,7 +263,7 @@ export function registerAgyCommands(ctx, { client, guiService, providerId, provi
             kind: "success",
             text: [
               `Added account '${added.account.name}' (dataDir=${added.account.geminiDir}, active=${added.activeAccount === added.account.name}).`,
-              `Sign in for this account in Settings -> Antigravity (ACP), by running \`${client.formatLoginCommand()}\`, or \`/agy-connect method gemini-api-key\`.`,
+              `Sign in for this account in Plugins -> @local/dsh-agi, by running \`${client.formatLoginCommand()}\`, or \`/agy-connect method gemini-api-key\`.`,
             ].join("\n"),
           };
         }
@@ -315,7 +315,7 @@ export function registerAgyCommands(ctx, { client, guiService, providerId, provi
             kind: "success",
             text: [
               `No named accounts configured yet (${listed.configPath || "~/.agi/acp.json"}).`,
-              "Run `/agy-accounts add <name> --data-dir <dir>` or open Settings -> Antigravity (ACP) to create one.",
+              "Run `/agy-accounts add <name> --data-dir <dir>` or open Plugins -> @local/dsh-agi to create one.",
             ].join("\n"),
           };
         }
@@ -359,8 +359,8 @@ export function registerAgyCommands(ctx, { client, guiService, providerId, provi
         return {
           kind: "success",
           text: guiServerInstance
-            ? `Standalone GUI running at ${guiServerInstance.getUrl()} (in-app panel is also available in Settings -> Antigravity (ACP)).`
-            : "Standalone GUI is not running (run `/agy-gui start` or open Settings -> Antigravity (ACP)).",
+            ? `Standalone GUI running at ${guiServerInstance.getUrl()} (in-app panel is also available inside Plugins -> @local/dsh-agi).`
+            : "Standalone GUI is not running (run `/agy-gui start` or open Plugins -> @local/dsh-agi).",
         };
       }
       if (!guiServerInstance) {
@@ -371,7 +371,7 @@ export function registerAgyCommands(ctx, { client, guiService, providerId, provi
         kind: "success",
         text: [
           `Antigravity ACP Account GUI listening at ${guiServerInstance.getUrl()}`,
-          `In DeepSeek Harness Desktop/Web, you can also open Settings -> Antigravity (ACP).`,
+          `In DeepSeek Harness Desktop/Web, you can also open Plugins -> @local/dsh-agi.`,
         ].join("\n"),
       };
     },

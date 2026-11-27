@@ -168,7 +168,7 @@ To link manually from a local clone:
 node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
 ```
 
-Restart DeepSeek Harness, open **Settings → Antigravity (ACP)** (or run `/agy-gui start` / `agi gui` for the standalone web console, or `/agy-connect` in chat) to sign in and manage accounts, and choose any `agy/<model>` in the model selector. `/agy-models`, `/agy-status`, `/agy-accounts`, and `/agy-gui` are also available.
+Restart DeepSeek Harness, open **Plugins → `@local/dsh-agi`** to view its detail page (or run `/agy-gui start` / `agi gui` for the standalone web console, or `/agy-connect` in chat) to sign in and manage accounts, and choose any `agy/<model>` in the model selector. `/agy-models`, `/agy-status`, `/agy-accounts`, and `/agy-gui` are also available.
 
 ---
 

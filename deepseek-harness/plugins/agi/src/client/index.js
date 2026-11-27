@@ -20,6 +20,7 @@
   var useRef = react.useRef;
 
   var NAMESPACE = "agi-acp";
+  var BUNDLE_PACKAGE_NAME = "@local/dsh-agi";
   var STYLE_ID = "agi-dsh-plugin-styles";
   var ACCOUNT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
@@ -1338,39 +1339,33 @@
 
   function apply(ctx) {
     if (ctx && ctx.locale && typeof ctx.locale.register === "function") {
-      ctx.locale.register(NAMESPACE, { en: LOCALES.en, zh: LOCALES.zh });
+      if (typeof ctx.effect === "function") {
+        ctx.effect(function () {
+          return ctx.locale.register(NAMESPACE, { en: LOCALES.en, zh: LOCALES.zh });
+        }, "agi-acp: dictionaries");
+      } else {
+        ctx.locale.register(NAMESPACE, { en: LOCALES.en, zh: LOCALES.zh });
+      }
     }
     var Panel = createPanelComponent(ctx);
-    var t = makeTranslator(ctx);
+
+    function AgiBundleConfigView(ownerProps) {
+      if (ownerProps && ownerProps.view === "summary") {
+        return null;
+      }
+      return h(Panel, ownerProps);
+    }
 
     if (ctx && ctx.slots && typeof ctx.slots.inject === "function" && typeof ctx.slots.register === "function") {
-      ctx.slots.inject("settings.section", function () {
+      ctx.slots.inject("plugins.bundle.config", function () {
         return ctx.slots.register(
           {
-            name: "settings.section",
-            id: NAMESPACE,
-            order: 25,
+            name: "plugins.bundle.config",
+            key: BUNDLE_PACKAGE_NAME,
+            registrant: BUNDLE_PACKAGE_NAME,
             locale: NAMESPACE,
-            label: function () {
-              return t("label");
-            },
           },
-          Panel,
-        );
-      });
-
-      ctx.slots.inject("plugins.item", function () {
-        return ctx.slots.register(
-          {
-            name: "plugins.item",
-            id: NAMESPACE,
-            order: 50,
-            locale: NAMESPACE,
-            label: function () {
-              return t("label");
-            },
-          },
-          Panel,
+          AgiBundleConfigView,
         );
       });
     }

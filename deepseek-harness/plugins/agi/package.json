@@ -1,7 +1,7 @@
 {
   "name": "@local/dsh-agi",
   "version": "0.4.0",
-  "description": "DeepSeek Harness plugin integrating Google Antigravity ACP (agy acp) as a native LLM provider with a Settings GUI for account login and multi-account management.",
+  "description": "DeepSeek Harness plugin integrating Google Antigravity ACP (agy acp) as a native LLM provider with a plugin detail GUI for account login and multi-account management.",
   "type": "module",
   "main": "src/index.mjs",
   "license": "MIT",
@@ -22,7 +22,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
       ],
       "platform": "web"
     }

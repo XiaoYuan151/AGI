@@ -689,8 +689,16 @@ test("DSH client bundle registers @local/dsh-agi via window.__ModuleLoader__ wit
 
   assert.ok(registeredLocales["agi-acp"]?.en?.title);
   assert.ok(registeredLocales["agi-acp"]?.zh?.title);
-  assert.deepEqual(injectedSlots, ["settings.section", "plugins.item"]);
-  assert.equal(registeredSlots.length, 2);
-  assert.equal(registeredSlots[0].meta.id, "agi-acp");
+  assert.deepEqual(injectedSlots, ["plugins.bundle.config"]);
+  assert.equal(registeredSlots.length, 1);
+  assert.equal(registeredSlots[0].meta.name, "plugins.bundle.config");
+  assert.equal(registeredSlots[0].meta.key, "@local/dsh-agi");
   assert.equal(typeof registeredSlots[0].component, "function");
+
+  // Only renders inside plugin detail, never on the plugin summary row
+  assert.equal(registeredSlots[0].component({ view: "summary" }), null);
+  const detailEl = registeredSlots[0].component({ view: "detail" });
+  assert.equal(typeof detailEl?.type, "function");
+  const defaultEl = registeredSlots[0].component({});
+  assert.equal(typeof defaultEl?.type, "function");
 });
