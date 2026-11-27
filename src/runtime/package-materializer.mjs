@@ -25,10 +25,7 @@ const RUNTIME_ASSETS = [
   "opencode",
   "deepseek-harness",
   "README.md",
-  "README.zh-CN.md",
-  "README.ja.md",
-  "README.ko.md",
-  "README.es.md",
+  "readme",
 ];
 
 export function resolveInstallStatePath(env = process.env) {

@@ -1,6 +1,6 @@
 # Anti-Gravity Integration (AGI)
 
-[English](README.md) | [简体中文](README.zh-CN.md) | **日本語** | [한국어](README.ko.md) | [Español](README.es.md)
+[English](../README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | **日本語** | [한국어](README.ko.md) | [Español](README.es.md)
 
 Anti-Gravity Integration (AGI) は、Claude Code、Codex、OpenCode、DeepSeek Harness、Neuro SDK などのハーネスに先進的な Gemini モデルを組み込むプラグインです。
 
@@ -8,10 +8,10 @@ Anti-Gravity Integration (AGI) は、Claude Code、Codex、OpenCode、DeepSeek H
 
 | ハーネス | 接続コマンド | `/model` のモデル ID | プラグインディレクトリ |
 | --- | --- | --- | --- |
-| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](claude-code/plugins/agi) |
-| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](codex/plugins/agi) |
-| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](opencode/plugins/agi) |
-| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](deepseek-harness/plugins/agi) |
+| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](../claude-code/plugins/agi) |
+| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](../codex/plugins/agi) |
+| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](../opencode/plugins/agi) |
+| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](../deepseek-harness/plugins/agi) |
 
 ---
 
@@ -168,7 +168,7 @@ OpenCode 内で `/connect` を開き **Antigravity (ACP)** を選ぶと、`agy a
 node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
 ```
 
-DeepSeek Harness を再起動し、`/agy-connect` で状態確認やサインイン（例：`/agy-connect method gemini-api-key`、または `agy-dsh-connect`）を行ってから、モデル選択で `agy/<model>` を選びます。`/agy-models`、`/agy-status`、`/agy-accounts` も使えます。
+DeepSeek Harness を再起動し、**Plugins → `@local/dsh-agi`** からプラグイン詳細画面を開く（またはスタンドアロン Web コンソール用に `/agy-gui start` / `agi gui` を実行、あるいはチャット内で `/agy-connect` を実行）ことで、サインインとマルチアカウント管理が行えます。その後、モデル選択で任意の `agy/<model>` を選択してください。`/agy-models`、`/agy-status`、`/agy-accounts`、`/agy-gui` も利用できます。
 
 ---
 

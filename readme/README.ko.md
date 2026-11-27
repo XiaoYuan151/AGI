@@ -1,6 +1,6 @@
 # Anti-Gravity Integration (AGI)
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | **한국어** | [Español](README.es.md)
+[English](../README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | **한국어** | [Español](README.es.md)
 
 Anti-Gravity Integration (AGI)은 Claude Code, Codex, OpenCode, DeepSeek Harness, Neuro SDK 등 다양한 하네스에 최신 Gemini 모델을 통합해 주는 플러그인입니다.
 
@@ -8,10 +8,10 @@ Anti-Gravity Integration (AGI)은 Claude Code, Codex, OpenCode, DeepSeek Harness
 
 | 하네스 | 연결 명령 | `/model` 모델 ID | 플러그인 경로 |
 | --- | --- | --- | --- |
-| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](claude-code/plugins/agi) |
-| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](codex/plugins/agi) |
-| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](opencode/plugins/agi) |
-| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](deepseek-harness/plugins/agi) |
+| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](../claude-code/plugins/agi) |
+| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](../codex/plugins/agi) |
+| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](../opencode/plugins/agi) |
+| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](../deepseek-harness/plugins/agi) |
 
 ---
 
@@ -168,7 +168,7 @@ OpenCode 안에서 `/connect` → **Antigravity (ACP)**를 선택해 `agy acp --
 node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
 ```
 
-DeepSeek Harness를 다시 시작한 뒤 `/agy-connect`로 상태를 확인하거나 로그인하고(예: `/agy-connect method gemini-api-key` 또는 `agy-dsh-connect`) 모델 선택기에서 `agy/<model>`을 고르세요. `/agy-models`, `/agy-status`, `/agy-accounts`도 사용할 수 있습니다.
+DeepSeek Harness를 다시 시작한 뒤 **Plugins → `@local/dsh-agi`**에서 플러그인 상세 화면을 열어 로그인 및 계정을 관리하거나(또는 `/agy-gui start` / `agi gui`로 독립 웹 콘솔 실행, 채팅에서 `/agy-connect` 실행), 모델 선택기에서 원하는 `agy/<model>`을 고르세요. `/agy-models`, `/agy-status`, `/agy-accounts`, `/agy-gui`도 사용할 수 있습니다.
 
 ---
 

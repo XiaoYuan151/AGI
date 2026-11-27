@@ -1,6 +1,6 @@
 # Anti-Gravity Integration (AGI)
 
-[English](README.md) | **简体中文** | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
+[English](../README.md) | **简体中文** | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
 Anti-Gravity Integration (AGI) 是一个面向 Claude Code、Codex、OpenCode、DeepSeek Harness、Neuro SDK 等工具的插件，将先进的 Gemini 模型带入这些工作流中。
 
@@ -8,10 +8,10 @@ Anti-Gravity Integration (AGI) 是一个面向 Claude Code、Codex、OpenCode、
 
 | 工具 | 登录 / 连接命令 | `/model` 中的模型 ID | 插件目录 |
 | --- | --- | --- | --- |
-| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](claude-code/plugins/agi) |
-| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](codex/plugins/agi) |
-| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](opencode/plugins/agi) |
-| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](deepseek-harness/plugins/agi) |
+| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](../claude-code/plugins/agi) |
+| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](../codex/plugins/agi) |
+| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](../opencode/plugins/agi) |
+| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](../deepseek-harness/plugins/agi) |
 
 ---
 
@@ -168,7 +168,7 @@ node ./plugins/agi/scripts/setup-codex.mjs --start-bridge
 node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
 ```
 
-重启 DeepSeek Harness 后，在对话中运行 `/agy-connect` 查看状态或登录（如 `/agy-connect method gemini-api-key` 或运行 `agy-dsh-connect`），然后在模型列表选择 `agy/<model>` 即可。同时支持 `/agy-models`、`/agy-status` 与 `/agy-accounts`。
+重启 DeepSeek Harness 后，打开 **插件 → `@local/dsh-agi`** 进入插件详情页（或运行 `/agy-gui start` / `agi gui` 启动独立网页控制台，或在对话中运行 `/agy-connect`）即可完成登录与多账号管理，随后在模型选择器中选择任意 `agy/<model>`。同时支持 `/agy-models`、`/agy-status`、`/agy-accounts` 与 `/agy-gui`。
 
 ---
 

@@ -1,6 +1,6 @@
 # Anti-Gravity Integration (AGI)
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **Español**
+[English](../README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **Español**
 
 Anti-Gravity Integration (AGI) es un plugin para Claude Code, Codex, OpenCode, DeepSeek Harness, Neuro SDK y otros harnesses que lleva los modelos avanzados de Gemini a todos ellos.
 
@@ -8,10 +8,10 @@ Instala el plugin una vez, inicia sesión con el comando nativo de tu herramient
 
 | Harness | Comando de conexión | IDs en `/model` | Carpeta del plugin |
 | --- | --- | --- | --- |
-| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](claude-code/plugins/agi) |
-| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](codex/plugins/agi) |
-| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](opencode/plugins/agi) |
-| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](deepseek-harness/plugins/agi) |
+| Claude Code | `/agi:connect` | `anthropic-agy/<model>` | [`claude-code/plugins/agi/`](../claude-code/plugins/agi) |
+| Codex | `$agy-connect` | `agy/<model>` | [`codex/plugins/agi/`](../codex/plugins/agi) |
+| OpenCode | `/connect` → **Antigravity (ACP)** | `agy/<model>` | [`opencode/plugins/agi/`](../opencode/plugins/agi) |
+| DeepSeek Harness | `/agy-connect` | `agy/<model>` | [`deepseek-harness/plugins/agi/`](../deepseek-harness/plugins/agi) |
 
 ---
 
@@ -168,7 +168,7 @@ Para enlazarlo manualmente:
 node ./deepseek-harness/plugins/agi/scripts/setup-dsh.mjs
 ```
 
-Reinicia DeepSeek Harness, usa `/agy-connect` para revisar el estado o iniciar sesión (por ejemplo, `/agy-connect method gemini-api-key` o `agy-dsh-connect`) y elige `agy/<model>` en el selector. También incluye `/agy-models`, `/agy-status` y `/agy-accounts`.
+Reinicia DeepSeek Harness, abre **Plugins → `@local/dsh-agi`** para ver su página de detalle (o ejecuta `/agy-gui start` / `agi gui` para la consola web independiente, o `/agy-connect` en el chat) para iniciar sesión y gestionar cuentas, y elige cualquier `agy/<model>` en el selector de modelos. También incluye `/agy-models`, `/agy-status`, `/agy-accounts` y `/agy-gui`.
 
 ---
 

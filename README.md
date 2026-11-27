@@ -1,6 +1,6 @@
 # Anti-Gravity Integration (AGI)
 
-**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
+**English** | [简体中文](readme/README.zh-CN.md) | [繁體中文](readme/README.zh-TW.md) | [日本語](readme/README.ja.md) | [한국어](readme/README.ko.md) | [Español](readme/README.es.md)
 
 Anti-Gravity Integration (AGI) is a plugin for Claude Code, Codex, OpenCode, DeepSeek Harness, Neuro SDK, and other harnesses that brings the advanced Gemini models into them.
 

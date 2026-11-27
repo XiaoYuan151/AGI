@@ -77,7 +77,8 @@
     "opencode/",
     "deepseek-harness/",
     "LICENSE",
-    "README*.md"
+    "README.md",
+    "readme/"
   ],
   "scripts": {
     "agi": "node ./bin/agi.mjs",
