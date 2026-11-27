@@ -255,9 +255,12 @@ test("npx github/local git shorthand runs agi install, bin supports install.sh f
   const workflowPath = path.join(REPO_ROOT, ".github", "workflows", "publish-npm.yml");
   assert.ok(fs.existsSync(workflowPath));
   const workflowSrc = fs.readFileSync(workflowPath, "utf8");
-  assert.match(workflowSrc, /tags:/);
-  assert.match(workflowSrc, /"v\*"/);
-  assert.match(workflowSrc, /release:/);
+  // Publishing is triggered only by a published GitHub release (or manual dispatch);
+  // tag pushes must not publish on their own.
+  const triggersBlock = workflowSrc.slice(0, workflowSrc.indexOf("permissions:"));
+  assert.doesNotMatch(triggersBlock, /^\s*push:/m);
+  assert.doesNotMatch(triggersBlock, /tags:/);
+  assert.match(workflowSrc, /release:\s*\n\s*types:\s*\[published\]/);
   assert.match(workflowSrc, /workflow_dispatch:/);
   assert.match(workflowSrc, /id-token:\s*write/);
   assert.match(workflowSrc, /npm test/);
